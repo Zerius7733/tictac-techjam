@@ -13,8 +13,11 @@ Requirements:
 - An Ark API key and Responses-capable endpoint
 
 ```bash
-ARK_API_KEY=your-ark-api-key ARK_MODEL=ep-your-endpoint-id npm run poc
+npm run poc
 ```
+
+The local POC reads provider and Runtime settings from `.env`. Explicit shell
+environment variables still take precedence over values in the file.
 
 Open <http://localhost:3000>. Press `Ctrl+C` to stop the server and remove this
 instance's remaining Runtime containers.

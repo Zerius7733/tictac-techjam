@@ -4,6 +4,46 @@ set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"
 
+load_poc_env_file() {
+  local env_file="$1"
+  [[ -f "$env_file" ]] || return 0
+
+  local line key value
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "$line" || "${line:0:1}" == \# ]] && continue
+    if [[ "$line" == export[[:space:]]* ]]; then
+      line="${line#export}"
+      line="${line#"${line%%[![:space:]]*}"}"
+    fi
+    [[ "$line" == *=* ]] || continue
+
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+
+    case "$key" in
+      ARK_API_KEY|ARK_MODEL|ARK_BASE_URL|CODEX_SANDBOX_MODE|CODEX_TIMEOUT_MS|CODEX_MAX_OUTPUT_BYTES|CONTAINER_ENGINE|CONTAINER_RUNTIME_IMAGE|CONTAINER_RUNTIME_BASE_IMAGE|CONTAINER_APT_MIRROR|CONTAINER_APT_SECURITY_MIRROR|CONTAINER_RUNTIME_APT_PACKAGES|CONTAINER_CPU_LIMIT|CONTAINER_MEMORY_LIMIT|CONTAINER_PIDS_LIMIT|CONTAINER_USER|RUNTIME_INSTANCE_ID|LOCAL_POC_DATA_ROOT)
+        ;;
+      *)
+        continue
+        ;;
+    esac
+
+    # Explicit shell exports take precedence over values from .env.
+    [[ -n "${!key:-}" ]] && continue
+
+    case "$value" in
+      \"*\") value="${value:1:${#value}-2}" ;;
+      \'*\') value="${value:1:${#value}-2}" ;;
+    esac
+    export "$key=$value"
+  done < "$env_file"
+}
+
+load_poc_env_file "${LOCAL_POC_ENV_FILE:-.env}"
+
 runtime_image="${CONTAINER_RUNTIME_IMAGE:-volc-agent-runtime:local}"
 runtime_base_image="${CONTAINER_RUNTIME_BASE_IMAGE:-node:22-bookworm-slim}"
 runtime_apt_mirror="${CONTAINER_APT_MIRROR:-}"

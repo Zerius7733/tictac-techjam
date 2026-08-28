@@ -67,9 +67,10 @@ Skip this step when already working from the repository root.
 
 ### 3. Start the POC
 
+Fill in the provider values in `.env`. The local POC reads the provider and
+Runtime settings from that file, so no shell `export` commands are required.
+
 ```bash
-ARK_API_KEY=your-ark-api-key \
-ARK_MODEL=ep-your-endpoint-id \
 npm run poc
 ```
 
