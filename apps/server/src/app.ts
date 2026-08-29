@@ -8,6 +8,7 @@ import Fastify, {
 import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { AgentPolicyGateway } from "./agent-policy-gateway.js";
 import { AuthStore } from "./auth-store.js";
 import type { AppConfig } from "./config.js";
 import { HttpError } from "./errors.js";
@@ -15,6 +16,14 @@ import type { AgentService } from "./agent-service.js";
 
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
+const capabilityParams = z.object({
+  id: z.string().uuid(),
+  capabilityId: z.string().uuid(),
+});
+const approvalParams = z.object({
+  id: z.string().uuid(),
+  approvalId: z.string().uuid(),
+});
 const createAgentBody = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(500).optional(),
@@ -31,6 +40,25 @@ const loginBody = z.object({
   username: z.string().trim().min(1).max(120),
   password: z.string().min(1).max(256),
 });
+const capabilityBody = z.object({
+  resourceType: z.string().trim().min(1).max(80),
+  resourceKey: z.string().trim().min(1).max(160),
+  action: z.enum(["read", "write"]),
+  expiresInSeconds: z.number().int().min(60).max(86_400).default(3_600),
+});
+const toolCallBody = z.object({
+  resourceType: z.string().trim().min(1).max(80),
+  resourceKey: z.string().trim().min(1).max(160),
+  action: z.enum(["read", "write"]),
+  inputText: z.string().max(10_000).optional(),
+});
+const credentialParams = z.object({
+  id: z.string().uuid(),
+  credentialId: z.string().uuid(),
+});
+const credentialBody = z.object({
+  expiresInSeconds: z.number().int().min(60).max(86_400).default(3_600),
+});
 
 type ResourceType = "agent" | "run" | "orchestration" | "system";
 
@@ -40,6 +68,13 @@ function requestPath(request: FastifyRequest): string {
 
 function isRoute(request: FastifyRequest, method: string, path: string): boolean {
   return request.method === method && requestPath(request) === path;
+}
+
+function isAgentConversation(request: FastifyRequest): boolean {
+  return (
+    request.method === "POST" &&
+    /^\/api\/agents\/[^/]+\/messages$/.test(requestPath(request))
+  );
 }
 
 function bearerToken(request: FastifyRequest): string {
@@ -110,6 +145,7 @@ export async function createApp(
   config: AppConfig,
   service: AgentService,
   authStore?: AuthStore,
+  policyGateway?: AgentPolicyGateway,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
@@ -118,6 +154,7 @@ export async function createApp(
         "req.headers.authorization",
         "req.headers.cookie",
         "req.headers['x-app-auth-token']",
+        "req.headers['x-agent-principal-token']",
       ],
     },
     bodyLimit: 1_048_576,
@@ -128,10 +165,16 @@ export async function createApp(
       config.nodeEnv === "development"
         ? ["http://localhost:5173", "http://127.0.0.1:5173"]
         : false,
-    allowedHeaders: ["Content-Type", "Authorization", "X-App-Auth-Token"],
+      allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "X-App-Auth-Token",
+        "X-Agent-Principal-Token",
+      ],
   });
 
   app.decorateRequest("auth", null);
+  app.decorateRequest("agentAuth", null);
   app.addHook("onRequest", async (request, reply) => {
     const path = requestPath(request);
     if (!path.startsWith("/api/")) return;
@@ -140,6 +183,8 @@ export async function createApp(
     const isAuthInfo = isRoute(request, "GET", "/api/auth");
     const isLogin = isRoute(request, "POST", "/api/auth/login");
     const isAccessCheck = isRoute(request, "GET", "/api/auth/access");
+    const isAgentToolCall = isRoute(request, "POST", "/api/agent/tool-calls");
+    const isConversation = isAgentConversation(request);
 
     if (config.authToken && !isHealth && !isAuthInfo) {
       // With database auth enabled, the shared deployment token uses its own
@@ -153,9 +198,31 @@ export async function createApp(
 
     if (!authStore || isHealth) return;
 
+    if (isAgentToolCall) {
+      const token = request.headers["x-agent-principal-token"];
+      request.agentAuth =
+        typeof token === "string"
+          ? authStore.authenticateAgentCredential(token, request.id)
+          : null;
+      if (!request.agentAuth) {
+        return reply.code(401).send({ error: "Valid Agent principal token required" });
+      }
+      return;
+    }
+
     request.auth = bearerToken(request)
       ? authStore.authenticate(bearerToken(request), request.id)
       : null;
+
+    if (isConversation) {
+      const token = request.headers["x-agent-principal-token"];
+      if (typeof token === "string" && token.trim()) {
+        request.agentAuth = authStore.authenticateAgentCredential(token, request.id);
+        if (!request.agentAuth) {
+          return reply.code(401).send({ error: "Valid Agent principal token required" });
+        }
+      }
+    }
 
     if (!isAuthInfo && !isLogin && !isAccessCheck && !request.auth) {
       return reply.code(401).send({ error: "Authentication required" });
@@ -300,6 +367,7 @@ export async function createApp(
       body.content,
       access.ownerUserId,
       access.includeAll,
+      request.agentAuth ?? undefined,
     );
     return reply.code(202).send(result);
   });
@@ -309,6 +377,183 @@ export async function createApp(
     if (!requirePermission(request, reply, authStore, "view", "run", id)) return;
     const access = agentAccess(request, authStore);
     return { run: service.getRun(id, access.ownerUserId, access.includeAll) };
+  });
+
+  app.get("/api/security/mock-resources", async (request, reply) => {
+    if (!policyGateway || !request.auth) {
+      return reply.code(503).send({ error: "Agent policy is not configured" });
+    }
+    if (!requirePermission(request, reply, authStore, "view", "orchestration", "*")) {
+      return;
+    }
+    return { resources: policyGateway.listResources(request.auth) };
+  });
+
+  app.get("/api/agents/:id/capabilities", async (request, reply) => {
+    const { id } = agentIdParams.parse(request.params);
+    if (!requirePermission(request, reply, authStore, "view", "agent", id)) return;
+    if (!policyGateway || !request.auth) {
+      return reply.code(503).send({ error: "Agent policy is not configured" });
+    }
+    const access = agentAccess(request, authStore);
+    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
+    return { capabilities: policyGateway.listCapabilities(agent) };
+  });
+
+  app.post("/api/agents/:id/capabilities", async (request, reply) => {
+    const { id } = agentIdParams.parse(request.params);
+    if (!policyGateway || !request.auth) {
+      return reply.code(503).send({ error: "Agent policy is not configured" });
+    }
+    const access = agentAccess(request, authStore);
+    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
+    const body = capabilityBody.parse(request.body);
+    const capability = policyGateway.grantCapability(request.auth, agent, body);
+    return reply.code(201).send({ capability });
+  });
+
+  app.get("/api/agents/:id/credentials", async (request, reply) => {
+    const { id } = agentIdParams.parse(request.params);
+    if (!requirePermission(request, reply, authStore, "view", "agent", id)) return;
+    if (!authStore || !request.auth) {
+      return reply.code(503).send({ error: "Database authentication is not configured" });
+    }
+    const access = agentAccess(request, authStore);
+    service.getAgent(id, access.ownerUserId, access.includeAll);
+    return { credentials: authStore.listAgentCredentials(id) };
+  });
+
+  app.post("/api/agents/:id/credentials", async (request, reply) => {
+    const { id } = agentIdParams.parse(request.params);
+    if (!requirePermission(request, reply, authStore, "delegate", "agent", id)) return;
+    if (!authStore || !request.auth) {
+      return reply.code(503).send({ error: "Database authentication is not configured" });
+    }
+    service.getAgent(id, request.auth.userId, false);
+    const body = credentialBody.parse(request.body);
+    const credential = authStore.issueAgentCredential(
+      id,
+      request.auth.userId,
+      body.expiresInSeconds,
+    );
+    return reply.code(201).send({ credential });
+  });
+
+  app.post("/api/agents/:id/credentials/:credentialId/revoke", async (request, reply) => {
+    const { id, credentialId } = credentialParams.parse(request.params);
+    if (!requirePermission(request, reply, authStore, "delegate", "agent", id)) return;
+    if (!authStore || !request.auth) {
+      return reply.code(503).send({ error: "Database authentication is not configured" });
+    }
+    service.getAgent(id, request.auth.userId, false);
+    const credential = authStore.revokeAgentCredential(credentialId, id);
+    if (!credential) return reply.code(404).send({ error: "Agent credential not found" });
+    return { credential };
+  });
+
+  app.post("/api/agents/:id/capabilities/:capabilityId/revoke", async (request, reply) => {
+    const { id, capabilityId } = capabilityParams.parse(request.params);
+    if (!policyGateway || !request.auth) {
+      return reply.code(503).send({ error: "Agent policy is not configured" });
+    }
+    const access = agentAccess(request, authStore);
+    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
+    const capability = policyGateway.revokeCapability(request.auth, agent, capabilityId);
+    return { capability };
+  });
+
+  app.post("/api/agents/:id/tool-calls", async (request, reply) => {
+    const { id } = agentIdParams.parse(request.params);
+    if (!policyGateway || !request.auth) {
+      return reply.code(503).send({ error: "Agent policy is not configured" });
+    }
+    const access = agentAccess(request, authStore);
+    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
+    const body = toolCallBody.parse(request.body);
+    const result = policyGateway.execute(request.auth, agent, body);
+    if (!result.allowed) {
+      return reply.code(403).send({
+        error:
+          result.status === "approval_required"
+            ? "Approval required"
+            : "Agent action denied",
+        ...result,
+      });
+    }
+    return result;
+  });
+
+  app.post("/api/agent/tool-calls", async (request, reply) => {
+    if (!policyGateway || !request.agentAuth) {
+      return reply.code(503).send({ error: "Agent policy is not configured" });
+    }
+    const body = toolCallBody.parse(request.body);
+    const agent = service.getAgent(request.agentAuth.agentId, request.agentAuth.ownerUserId, false);
+    const result = policyGateway.executeAsAgent(request.agentAuth, agent, body);
+    if (!result.allowed) {
+      return reply.code(403).send({
+        error:
+          result.status === "approval_required"
+            ? "Approval required"
+            : "Agent action denied",
+        ...result,
+      });
+    }
+    return result;
+  });
+
+  app.get("/api/agents/:id/approvals", async (request, reply) => {
+    const { id } = agentIdParams.parse(request.params);
+    if (!requirePermission(request, reply, authStore, "view", "agent", id)) return;
+    if (!policyGateway || !request.auth) {
+      return reply.code(503).send({ error: "Agent policy is not configured" });
+    }
+    const access = agentAccess(request, authStore);
+    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
+    return { approvals: policyGateway.listApprovals(agent) };
+  });
+
+  app.post("/api/agents/:id/approvals/:approvalId/approve", async (request, reply) => {
+    const { id, approvalId } = approvalParams.parse(request.params);
+    if (!policyGateway || !request.auth) {
+      return reply.code(503).send({ error: "Agent policy is not configured" });
+    }
+    const access = agentAccess(request, authStore);
+    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
+    const approval = policyGateway.decideApproval(
+      request.auth,
+      agent,
+      approvalId,
+      "approved",
+    );
+    return { approval };
+  });
+
+  app.post("/api/agents/:id/approvals/:approvalId/deny", async (request, reply) => {
+    const { id, approvalId } = approvalParams.parse(request.params);
+    if (!policyGateway || !request.auth) {
+      return reply.code(503).send({ error: "Agent policy is not configured" });
+    }
+    const access = agentAccess(request, authStore);
+    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
+    const approval = policyGateway.decideApproval(
+      request.auth,
+      agent,
+      approvalId,
+      "denied",
+    );
+    return { approval };
+  });
+
+  app.get("/api/agents/:id/action-logs", async (request, reply) => {
+    const { id } = agentIdParams.parse(request.params);
+    if (!requirePermission(request, reply, authStore, "view", "agent", id)) return;
+    if (!policyGateway || !request.auth) {
+      return reply.code(503).send({ error: "Agent policy is not configured" });
+    }
+    const access = agentAccess(request, authStore);
+    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
+    return { actions: policyGateway.listActionLogs(agent) };
   });
 
   if (config.nodeEnv === "production") {

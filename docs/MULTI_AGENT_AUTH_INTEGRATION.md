@@ -8,6 +8,10 @@ The executable authentication migration is
 [001_authentication.sql](../db/migrations/001_authentication.sql).
 The independent Agent identity migration is
 [003_agent_principals.sql](../db/migrations/003_agent_principals.sql).
+Delegated policy is defined by
+[004_agent_policy.sql](../db/migrations/004_agent_policy.sql), and independent
+runtime credentials by
+[005_agent_credentials.sql](../db/migrations/005_agent_credentials.sql).
 
 ## Ownership boundary
 
@@ -15,8 +19,11 @@ The authentication side owns:
 
 - `users`, including active/inactive state;
 - `roles`, `user_roles`, and `permissions`;
-- `auth_sessions`; and
-- `agent_principals`, which gives each Agent an independent identity; and
+- `auth_sessions`;
+- `agent_principals` and `agent_principal_credentials`, which give each Agent
+  an independent identity and revocable runtime credential;
+- `agent_capabilities`, `mock_resources`, `agent_approval_requests`, and
+  `agent_action_logs`, which implement delegated policy and attribution; and
 - the base `audit_logs` record for each request and authorization decision.
 
 The multi-agent side owns:
@@ -64,6 +71,34 @@ delegation tables without changing run history.
 5. For a permitted Agent action, the service inserts `audit_agent_context`
    using the new audit row’s id and the executing `agent_id`/`run_id`.
 6. Only then does the service queue the run or invoke the runtime.
+
+For a tool call made by the runtime itself, the Agent sends its
+`X-Agent-Principal-Token` to the policy gateway. The gateway validates the
+credential, checks the exact capability and private-resource owner, and
+requires a human approval for a write. The human session that issued the
+credential is not silently treated as an unrestricted Agent session.
+
+## Protected records from the Agent chat
+
+The playground conversation is connected to the same boundary for the demo
+resources. After Alice issues a credential and grants the Agent `read` access
+to `alice-private-note`, she can close the policy panel and type:
+
+```text
+Read Alice's private notes
+```
+
+The server recognizes this explicit demo-resource request, authenticates the
+`X-Agent-Principal-Token` kept in the current browser tab, and calls
+`executeAsAgent` before returning any record value. The chat shows the policy
+result and the value only when the Agent is active and the exact capability is
+valid. Without a credential, without a capability, after expiry, or after
+revocation, the chat shows a denial instead. Ordinary coding prompts continue
+through the normal Codex runner.
+
+This is intentionally a small adapter for the hackathon proof. A production
+version would replace the phrase matcher with the runtime's typed tool/MCP
+transport, while keeping the policy gateway and database contract unchanged.
 
 The browser must never be allowed to choose `user_id`, `owner_user_id`, or the
 Agent identity used for authorization. Those values come from the validated
@@ -117,11 +152,24 @@ The `auditLogId` lets the orchestration side insert `audit_agent_context`
 without taking ownership of roles, sessions, password verification, or
 permission precedence.
 
+The current policy gateway adds this boundary:
+
+```text
+issue Agent credential -> authenticate Agent principal -> check capability
+                                      |
+                                      +--> write -> human approval -> execute
+```
+
+The orchestration service should call the gateway for tool/resource actions;
+it should not read `agent_capabilities` directly or implement a second role
+resolver.
+
 ## Migration order
 
 Apply the migrations in order: authentication (`001`), orchestration (`002`),
-then independent Agent identities (`003`). In the current POC, `003` can also
-be applied to the auth-only database because Agent metadata is still stored in
+independent Agent identities (`003`), delegated policy (`004`), and Agent
+credentials (`005`). In the current POC, `003` through `005` can also be
+applied to the auth-only database because Agent metadata is still stored in
 JSON; the final combined database should add the `agent_id` foreign key once
 the SQLite `agents` table becomes authoritative. Do not create a second
 `users` table inside the Agent module.

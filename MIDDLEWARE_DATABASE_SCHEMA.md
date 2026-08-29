@@ -26,7 +26,10 @@ The database must support:
 6. tracking a top-level orchestration request;
 7. tracking each agent execution within that request;
 8. storing prompts, progress events, results, and errors in order; and
-9. surviving a server restart without losing the execution history.
+9. giving each Agent an independent, revocable runtime identity;
+10. delegating narrow capabilities to Agent identities;
+11. requiring human approval for selected writes; and
+12. surviving a server restart without losing the execution history.
 
 It does **not** attempt to be a production identity provider, workflow engine,
 distributed queue, or multi-tenant platform.
@@ -35,7 +38,7 @@ distributed queue, or multi-tenant platform.
 
 | Area | Primary owner | Tables | Responsibility |
 | --- | --- | --- | --- |
-| Authentication and authorization | Person A | `users`, `roles`, `user_roles`, `permissions`, `auth_sessions`, `audit_logs` | Identity, login/session validation, role lookup, permission decisions, auth audit records |
+| Authentication and authorization | Person A | `users`, `roles`, `user_roles`, `permissions`, `auth_sessions`, `audit_logs`, `agent_principals`, `agent_principal_credentials`, `agent_capabilities`, `mock_resources`, `agent_approval_requests`, `agent_action_logs` | Human login, Agent identity, delegated policy, approvals, revocation, and security audit records |
 | Agent orchestration | Person B | `agents`, `orchestration_jobs`, `agent_runs`, `agent_messages` | Agent registry, job lifecycle, agent execution lifecycle, prompts/results/events |
 | Shared integration | Both | `schema_migrations` and the contracts in this document | Migration order, IDs, status values, timestamps, JSON shapes, API response conventions |
 
@@ -51,11 +54,13 @@ Client
   v
 API request
   |
-  +--> Authentication middleware
+  +--> Authentication and policy middleware
   |      - hashes bearer token
   |      - loads user and roles
   |      - checks permission
-  |      - writes audit decision
+  |      - authenticates Agent credentials
+  |      - checks Agent capabilities and approvals
+  |      - writes audit decisions
   |
   +--> Agent/orchestration service
          - checks agent ownership and status
@@ -89,6 +94,14 @@ erDiagram
     users ||--o{ agents : owns
     users ||--o{ agent_principals : owns
     agents ||--|| agent_principals : identifies
+    agent_principals ||--o{ agent_principal_credentials : uses
+    agent_principals ||--o{ agent_capabilities : receives
+    users ||--o{ agent_capabilities : grants
+    users ||--o{ mock_resources : owns
+    mock_resources ||--o{ agent_approval_requests : protects
+    agent_principals ||--o{ agent_approval_requests : requests
+    agent_principals ||--o{ agent_action_logs : performs
+    audit_logs ||--o| agent_action_logs : correlates
     users ||--o{ orchestration_jobs : submits
     orchestration_jobs ||--o{ agent_runs : contains
     agents ||--o{ agent_runs : executes
@@ -307,6 +320,117 @@ database.
 | `created_at` | `TEXT` | Not null, default UTC now | Creation time |
 | `revoked_at` | `TEXT` | Nullable | Revocation time |
 
+### 5.8.2 `agent_principal_credentials`
+
+Short-lived credentials used by an Agent runtime when it calls the trusted
+tool boundary. A raw credential is returned only once at issuance. It must
+never be placed in an Agent prompt, persisted in Agent configuration, or
+written to logs.
+
+| Column | Type | Constraints | Meaning |
+| --- | --- | --- | --- |
+| `id` | `TEXT` | Primary key | Credential UUID |
+| `agent_principal_id` | `TEXT` | Not null, foreign key to `agent_principals.id` with `ON DELETE CASCADE` | Agent identity using the credential |
+| `token_hash` | `TEXT` | Not null, unique | SHA-256 hash of the raw credential |
+| `issued_by_user_id` | `TEXT` | Not null, foreign key to `users.id` with `ON DELETE CASCADE` | Human who issued it |
+| `expires_at` | `TEXT` | Not null | Expiration time |
+| `revoked_at` | `TEXT` | Nullable | Manual revocation time |
+| `created_at` | `TEXT` | Not null, default UTC now | Issue time |
+
+An Agent credential is valid only when the credential and its principal are
+active, the owner is active, and `expires_at` is in the future.
+
+### 5.8.3 `agent_capabilities`
+
+The narrow delegation grant for one Agent principal, one resource, and one
+action. This is deliberately separate from human role permissions: a user may
+be allowed to create an Agent without that Agent automatically receiving
+access to every resource.
+
+| Column | Type | Constraints | Meaning |
+| --- | --- | --- | --- |
+| `id` | `TEXT` | Primary key | Capability UUID |
+| `agent_principal_id` | `TEXT` | Not null, foreign key to `agent_principals.id` with `ON DELETE CASCADE` | Agent receiving the grant |
+| `resource_type` | `TEXT` | Not null | Protected resource family, for example `mock_record` |
+| `resource_key` | `TEXT` | Not null | Exact resource key |
+| `action` | `TEXT` | Not null; `read` or `write` | Operation granted |
+| `granted_by_user_id` | `TEXT` | Not null, foreign key to `users.id` with `ON DELETE CASCADE` | Human delegating the capability |
+| `expires_at` | `TEXT` | Not null | Expiration time |
+| `revoked_at` | `TEXT` | Nullable | Manual revocation time |
+| `created_at` | `TEXT` | Not null, default UTC now | Grant time |
+
+The policy gateway requires an exact active, unexpired row. There are no
+wildcards in Agent capabilities.
+
+### 5.8.4 `mock_resources`
+
+Small, seeded records used to demonstrate server-side ownership and delegated
+access. They stand in for a real protected data/tool boundary during the
+hackathon.
+
+| Column | Type | Constraints | Meaning |
+| --- | --- | --- | --- |
+| `id` | `TEXT` | Primary key | Resource UUID |
+| `resource_type` | `TEXT` | Not null | Resource family |
+| `resource_key` | `TEXT` | Not null, unique | Stable resource key |
+| `owner_user_id` | `TEXT` | Nullable, foreign key to `users.id` with `ON DELETE SET NULL` | Human owner; null means shared |
+| `sensitivity` | `TEXT` | Not null; `private` or `shared` | Ownership behavior |
+| `value` | `TEXT` | Not null | Mock value, never real secret data |
+| `created_at` | `TEXT` | Not null, default UTC now | Creation time |
+| `updated_at` | `TEXT` | Not null, default UTC now | Last write time |
+
+The server filters private resources by the authenticated human owner before
+capabilities are considered. A capability cannot cross that ownership
+boundary.
+
+### 5.8.5 `agent_approval_requests`
+
+Represents a human approval boundary for a proposed Agent write. The current
+mock implementation stores the proposed mock value so the demo can approve
+the exact operation. Real integrations should store a hash or a reviewed,
+redacted summary instead of a secret-bearing payload.
+
+| Column | Type | Constraints | Meaning |
+| --- | --- | --- | --- |
+| `id` | `TEXT` | Primary key | Approval UUID |
+| `agent_principal_id` | `TEXT` | Not null, foreign key to `agent_principals.id` with `ON DELETE CASCADE` | Agent requesting the write |
+| `requested_by_user_id` | `TEXT` | Not null, foreign key to `users.id` with `ON DELETE CASCADE` | Human owner on whose behalf it was requested |
+| `action` | `TEXT` | Not null; `read` or `write` | Requested operation |
+| `resource_type` | `TEXT` | Not null | Target resource family |
+| `resource_key` | `TEXT` | Not null | Target resource key |
+| `input_text` | `TEXT` | Not null, default empty string | Exact proposed mock write |
+| `status` | `TEXT` | Not null; `pending`, `approved`, `denied`, `expired`, or `consumed` | Approval lifecycle |
+| `expires_at` | `TEXT` | Not null | Approval deadline |
+| `decided_by_user_id` | `TEXT` | Nullable, foreign key to `users.id` with `ON DELETE SET NULL` | Human decision maker |
+| `decided_at` | `TEXT` | Nullable | Decision time |
+| `created_at` | `TEXT` | Not null, default UTC now | Request time |
+
+Approval is one-time: a successful write changes `approved` to `consumed`.
+
+### 5.8.6 `agent_action_logs`
+
+Agent-specific evidence for each protected tool action. It links to the base
+human/session or Agent-authentication audit event without copying role logic
+into the orchestration service.
+
+| Column | Type | Constraints | Meaning |
+| --- | --- | --- | --- |
+| `id` | `TEXT` | Primary key | Action UUID |
+| `audit_log_id` | `TEXT` | Not null, unique, foreign key to `audit_logs.id` with `ON DELETE CASCADE` | Correlated base audit event |
+| `agent_principal_id` | `TEXT` | Not null, foreign key to `agent_principals.id` with `ON DELETE CASCADE` | Executing Agent identity |
+| `capability_id` | `TEXT` | Nullable, foreign key to `agent_capabilities.id` with `ON DELETE SET NULL` | Capability evaluated |
+| `approval_id` | `TEXT` | Nullable, foreign key to `agent_approval_requests.id` with `ON DELETE SET NULL` | Approval evaluated |
+| `action` | `TEXT` | Not null | `read` or `write` |
+| `resource_type` | `TEXT` | Not null | Target resource family |
+| `resource_key` | `TEXT` | Not null | Target resource key |
+| `decision` | `TEXT` | Not null; `allow` or `deny` | Final policy outcome |
+| `result_code` | `TEXT` | Not null | Stable reason such as `read_completed`, `capability_not_granted`, or `approval_required` |
+| `metadata_json` | `TEXT` | Not null, default `{}` | Non-secret flags and correlation details |
+| `created_at` | `TEXT` | Not null, default UTC now | Action time |
+
+Never put raw credentials, passwords, provider keys, or sensitive tool inputs
+in `metadata_json`.
+
 ### 5.9 `orchestration_jobs`
 
 One top-level user request or workflow execution. A job can contain one or
@@ -501,6 +625,85 @@ CREATE INDEX IF NOT EXISTS idx_agent_principals_owner_status
 CREATE INDEX IF NOT EXISTS idx_agent_principals_agent_status
     ON agent_principals (agent_id, status);
 
+CREATE TABLE IF NOT EXISTS agent_principal_credentials (
+    id                  TEXT PRIMARY KEY,
+    agent_principal_id  TEXT NOT NULL,
+    token_hash          TEXT NOT NULL UNIQUE,
+    issued_by_user_id   TEXT NOT NULL,
+    expires_at          TEXT NOT NULL,
+    revoked_at          TEXT,
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (agent_principal_id) REFERENCES agent_principals(id) ON DELETE CASCADE,
+    FOREIGN KEY (issued_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS agent_capabilities (
+    id                  TEXT PRIMARY KEY,
+    agent_principal_id  TEXT NOT NULL,
+    resource_type       TEXT NOT NULL,
+    resource_key        TEXT NOT NULL,
+    action              TEXT NOT NULL CHECK (action IN ('read', 'write')),
+    granted_by_user_id  TEXT NOT NULL,
+    expires_at          TEXT NOT NULL,
+    revoked_at          TEXT,
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (agent_principal_id) REFERENCES agent_principals(id) ON DELETE CASCADE,
+    FOREIGN KEY (granted_by_user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS mock_resources (
+    id             TEXT PRIMARY KEY,
+    resource_type  TEXT NOT NULL,
+    resource_key   TEXT NOT NULL UNIQUE,
+    owner_user_id  TEXT,
+    sensitivity    TEXT NOT NULL DEFAULT 'private' CHECK (
+        sensitivity IN ('private', 'shared')
+    ),
+    value          TEXT NOT NULL,
+    created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_approval_requests (
+    id                   TEXT PRIMARY KEY,
+    agent_principal_id   TEXT NOT NULL,
+    requested_by_user_id TEXT NOT NULL,
+    action               TEXT NOT NULL CHECK (action IN ('read', 'write')),
+    resource_type        TEXT NOT NULL,
+    resource_key         TEXT NOT NULL,
+    input_text           TEXT NOT NULL DEFAULT '',
+    status               TEXT NOT NULL DEFAULT 'pending' CHECK (
+        status IN ('pending', 'approved', 'denied', 'expired', 'consumed')
+    ),
+    expires_at           TEXT NOT NULL,
+    decided_by_user_id   TEXT,
+    decided_at           TEXT,
+    created_at           TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (agent_principal_id) REFERENCES agent_principals(id) ON DELETE CASCADE,
+    FOREIGN KEY (requested_by_user_id) REFERENCES users(id) ON DELETE CASCADE,
+    FOREIGN KEY (decided_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_action_logs (
+    id                  TEXT PRIMARY KEY,
+    audit_log_id        TEXT NOT NULL UNIQUE,
+    agent_principal_id  TEXT NOT NULL,
+    capability_id       TEXT,
+    approval_id         TEXT,
+    action              TEXT NOT NULL,
+    resource_type       TEXT NOT NULL,
+    resource_key        TEXT NOT NULL,
+    decision            TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
+    result_code         TEXT NOT NULL,
+    metadata_json       TEXT NOT NULL DEFAULT '{}',
+    created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (audit_log_id) REFERENCES audit_logs(id) ON DELETE CASCADE,
+    FOREIGN KEY (agent_principal_id) REFERENCES agent_principals(id) ON DELETE CASCADE,
+    FOREIGN KEY (capability_id) REFERENCES agent_capabilities(id) ON DELETE SET NULL,
+    FOREIGN KEY (approval_id) REFERENCES agent_approval_requests(id) ON DELETE SET NULL
+);
+
 CREATE TABLE IF NOT EXISTS orchestration_jobs (
     id            TEXT PRIMARY KEY,
     request_id    TEXT NOT NULL UNIQUE,
@@ -605,6 +808,34 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time
 CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_time
     ON audit_logs (resource_type, resource_key, created_at DESC);
 
+CREATE INDEX IF NOT EXISTS idx_agent_credentials_principal_status
+    ON agent_principal_credentials (agent_principal_id, revoked_at, expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_credentials_issuer_time
+    ON agent_principal_credentials (issued_by_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_agent_capabilities_lookup
+    ON agent_capabilities (
+        agent_principal_id, resource_type, resource_key, action, expires_at
+    );
+
+CREATE INDEX IF NOT EXISTS idx_agent_capabilities_grantor
+    ON agent_capabilities (granted_by_user_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_mock_resources_owner
+    ON mock_resources (owner_user_id, resource_type, resource_key);
+
+CREATE INDEX IF NOT EXISTS idx_agent_approvals_lookup
+    ON agent_approval_requests (
+        agent_principal_id, status, resource_type, resource_key, expires_at
+    );
+
+CREATE INDEX IF NOT EXISTS idx_agent_action_logs_principal_time
+    ON agent_action_logs (agent_principal_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_agent_action_logs_resource_time
+    ON agent_action_logs (resource_type, resource_key, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_agents_status
     ON agents (status, updated_at DESC);
 
@@ -700,10 +931,16 @@ VALUES
         '11111111-1111-4111-8111-111111111111', 'system', '*', '*', 1),
     ('55555555-5555-4555-8555-555555555555',
         '11111111-1111-4111-8111-222222222222', 'agent', '*', 'invoke', 1),
+    ('55555555-5555-4555-8555-131313131313',
+        '11111111-1111-4111-8111-222222222222', 'agent', '*', 'delegate', 1),
+    ('55555555-5555-4555-8555-141414141414',
+        '11111111-1111-4111-8111-222222222222', 'agent', '*', 'approve', 1),
     ('55555555-5555-4555-8555-666666666666',
         '11111111-1111-4111-8111-222222222222', 'run', '*', 'view', 1),
     ('55555555-5555-4555-8555-777777777777',
         '11111111-1111-4111-8111-222222222222', 'orchestration', '*', 'create', 1),
+    ('55555555-5555-4555-8555-151515151515',
+        '11111111-1111-4111-8111-222222222222', 'orchestration', '*', 'view', 1),
     ('55555555-5555-4555-8555-888888888888',
         '11111111-1111-4111-8111-333333333333', 'agent', '*', 'view', 1),
     ('55555555-5555-4555-8555-999999999999',
@@ -716,6 +953,10 @@ COMMIT;
 
 For an actual demo login, generate a real hash at startup or with a small seed
 script. Do not check the resulting password into the repository.
+
+The current executable policy seed is separate so the orchestration contributor
+can replace `mock_resources` with real tool/data resources later:
+[`db/seeds/development_policy.sql`](db/seeds/development_policy.sql).
 
 ## 9. Shared contracts and API expectations
 
@@ -736,6 +977,22 @@ type AuthContext = {
 
 The orchestration service should receive this context rather than parsing the
 bearer token itself.
+
+Agent runtime requests use a different context:
+
+```ts
+type AgentRuntimeIdentity = {
+  credentialId: string;
+  principalId: string;
+  agentId: string;
+  ownerUserId: string;
+  requestId: string;
+};
+```
+
+The Agent credential identifies the Agent principal only. It does not grant
+access by itself; the policy gateway still checks ownership, capability,
+expiration, revocation, and approval state.
 
 ### Authorization contract
 
@@ -761,6 +1018,12 @@ Rules:
 - The caller must check authorization on the server; hiding a button in the UI
   is not authorization.
 - The orchestrator must perform an object-level owner check for private agents.
+- Agent tool calls must authenticate with an Agent principal credential and
+  must not inherit unrestricted access from the human session that issued it.
+- A capability must match the exact Agent principal, resource, and action and
+  must be active and unexpired.
+- A write capability is not sufficient by itself: the exact write request must
+  be approved before it is executed.
 
 ### Suggested API surface
 
@@ -779,6 +1042,15 @@ one.
 | `GET /api/agents/:id/messages` | `agent:view` | Read ordered messages for the agent's jobs |
 | `GET /api/agents/:id/runs` | `run:view` | Read runs for the agent |
 | `GET /api/runs/:id` | `run:view` | Read one run |
+| `POST /api/agents/:id/credentials` | `agent:delegate` | Issue a short-lived Agent credential; return the raw token once |
+| `POST /api/agents/:id/capabilities` | `agent:delegate` | Grant one exact Agent action on one resource |
+| `POST /api/agent/tool-calls` | Agent credential | Authenticate the Agent principal and evaluate its capability |
+| `GET /api/agents/:id/approvals` | `agent:view` | Read pending and completed approval requests |
+| `POST /api/agents/:id/approvals/:approvalId/approve` | `agent:approve` | Approve one pending proposed write |
+| `POST /api/agents/:id/approvals/:approvalId/deny` | `agent:approve` | Deny one pending proposed write |
+| `POST /api/agents/:id/capabilities/:capabilityId/revoke` | `agent:delegate` | Revoke delegated access immediately |
+| `POST /api/agents/:id/credentials/:credentialId/revoke` | `agent:delegate` | Revoke the Agent runtime credential immediately |
+| `GET /api/agents/:id/action-logs` | `agent:view` | Inspect Agent decisions and attribution |
 | `POST /api/orchestrations` | `orchestration:create` | Create a multi-agent job |
 | `GET /api/orchestrations/:id` | `orchestration:view` | Read job summary and current status |
 | `POST /api/orchestrations/:id/cancel` | `orchestration:cancel` | Mark job/runs cancelled and request runtime stop |
@@ -792,7 +1064,7 @@ one.
 - Include `requestId` in responses and logs so UI polling and debugging can be
   correlated.
 - Never return `password_hash`, `token_hash`, or a raw session token after the
-  login response.
+  login response. Return a raw Agent credential only in the issuance response.
 
 ### Mapping the current single-agent endpoints
 
@@ -835,6 +1107,21 @@ Login is a separate flow:
 5. Store only its hash in auth_sessions
 6. Return the raw token over HTTPS to the client
 7. Write a login audit event without the token
+```
+
+Agent tool-call flow:
+
+```text
+1. Human owner logs in with a normal session
+2. Human owner issues a short-lived Agent credential
+3. Agent runtime sends X-Agent-Principal-Token to the tool boundary
+4. Auth hashes the credential and loads the active Agent principal
+5. Policy gateway checks the exact resource/action capability
+6. Private-resource ownership is checked against the Agent owner
+7. A write creates or consumes a one-time human approval
+8. Agent action and base audit records capture the principal, capability,
+   approval, resource, decision, and result code
+9. Revoking the credential or capability changes the next request immediately
 ```
 
 ## 11. Orchestration flow
@@ -959,8 +1246,10 @@ Use one ordered migration sequence rather than merging database files:
     users, roles, user_roles, permissions, auth_sessions, audit_logs,
     agents, orchestration_jobs, agent_runs, agent_messages
 
-002_auth_seed_or_constraints.sql       # only if needed
-003_orchestration_change.sql           # future change
+002_multi_agent_orchestration.sql      # current orchestration tables
+003_agent_principals.sql               # independent Agent identity
+004_agent_policy.sql                   # capabilities, approvals, mock resources
+005_agent_credentials.sql              # hashed, revocable Agent credentials
 ```
 
 If the contributors work on separate initial scripts, combine them manually
@@ -1013,6 +1302,11 @@ next version.
 - [ ] Passwords and bearer tokens are hashed before storage.
 - [ ] Every protected route calls the authorization contract.
 - [ ] Denied decisions are written to `audit_logs`.
+- [ ] Each Agent has an independent principal and short-lived credential.
+- [ ] Agent tool calls require an exact, active capability.
+- [ ] Selected writes require one-time human approval.
+- [ ] Agent actions link principal, capability, approval, and audit IDs.
+- [ ] Credential and capability revocation affect the next request.
 - [ ] Job/root-run/prompt creation is one transaction.
 - [ ] Run completion and result-message insertion are one transaction.
 - [ ] Queued/running work is handled on restart.

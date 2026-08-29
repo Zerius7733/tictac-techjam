@@ -3,9 +3,11 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentService } from "./agent-service.js";
+import { AgentPolicyGateway } from "./agent-policy-gateway.js";
 import { AuthStore } from "./auth-store.js";
 import { loadConfig } from "./config.js";
 import { JsonStore } from "./store.js";
+import { PolicyStore } from "./policy-store.js";
 import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 
@@ -138,6 +140,69 @@ describe("Agent lifecycle", () => {
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.content).toContain("write hello world");
     expect(service.getAgent(agent.id).codexThreadId).toBe("fake-thread");
+  });
+
+  it("routes protected chat requests through the Agent policy gateway", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "launchpad-chat-policy-test-"));
+    temporaryDirectories.push(root);
+    const config = loadConfig({
+      NODE_ENV: "test",
+      APP_DATA_DIR: path.join(root, "data"),
+      AGENT_WORKSPACE_ROOT: path.join(root, "workspaces"),
+      CODEX_HOME: path.join(root, "codex"),
+      ARK_API_KEY: "test-key",
+      ARK_MODEL: "ep-test",
+    });
+    const authStore = new AuthStore(path.join(root, "data", "auth.db"));
+    const policyStore = new PolicyStore(path.join(root, "data", "auth.db"));
+    await authStore.initialize(true);
+    await policyStore.initialize(true);
+    const gateway = new AgentPolicyGateway(authStore, policyStore);
+    const service = new AgentService(
+      config,
+      new JsonStore(path.join(root, "data", "db.json")),
+      new WorkspaceManager(path.join(root, "workspaces")),
+      new FakeRunner(),
+      authStore,
+      gateway,
+    );
+    await service.initialize();
+
+    const login = authStore.login("alice", "alice-demo-2026", "chat-login");
+    const context = authStore.authenticate(login!.sessionToken, "chat-request")!;
+    const agent = await service.createAgent({ name: "Chat Policy Agent" }, context.userId);
+    const issued = authStore.issueAgentCredential(agent.id, context.userId, 3_600);
+    const identity = authStore.authenticateAgentCredential(issued.token, "chat-agent-auth")!;
+
+    const denied = await service.sendMessage(
+      agent.id,
+      "read Alice's private notes",
+      context.userId,
+      false,
+      identity,
+    );
+    await expect.poll(() => service.getRun(denied.run.id).status).toBe("completed");
+    expect(service.getRun(denied.run.id).output).toContain("capability_not_granted");
+
+    gateway.grantCapability(context, agent, {
+      resourceType: "mock_record",
+      resourceKey: "alice-private-note",
+      action: "read",
+      expiresInSeconds: 3_600,
+    });
+    const allowed = await service.sendMessage(
+      agent.id,
+      "read Alice's private notes",
+      context.userId,
+      false,
+      identity,
+    );
+    await expect.poll(() => service.getRun(allowed.run.id).status).toBe("completed");
+    expect(service.getRun(allowed.run.id).output).toContain("Alice private note");
+    expect(service.getRun(allowed.run.id).output).toContain("read_completed");
+
+    policyStore.close();
+    authStore.close();
   });
 
   it("atomically accepts only one concurrent run per Agent", async () => {

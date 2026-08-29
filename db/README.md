@@ -11,7 +11,10 @@ From the repository root:
 mkdir -p data
 sqlite3 data/auth.db < db/migrations/001_authentication.sql
 sqlite3 data/auth.db < db/migrations/003_agent_principals.sql
+sqlite3 data/auth.db < db/migrations/004_agent_policy.sql
+sqlite3 data/auth.db < db/migrations/005_agent_credentials.sql
 sqlite3 data/auth.db < db/seeds/development_auth.sql
+sqlite3 data/auth.db < db/seeds/development_policy.sql
 ```
 
 `data/` is ignored by Git. Commit the SQL files, not `auth.db`.
@@ -32,6 +35,16 @@ bob   / bob-demo-2026
 These are development-only credentials. Replace them before using the users in
 any non-demo environment.
 
+The policy seed also creates three mock resources:
+
+- `alice-private-note`, owned by Alice;
+- `bob-private-note`, owned by Bob; and
+- `shared-status`, a shared record.
+
+Alice can grant her Agent a capability to read or write her own mock record.
+Writes require a separate approval, and both the capability and the Agent
+credential can be revoked.
+
 ## Combined local database
 
 When the orchestration migration is ready, apply both migrations in order:
@@ -41,11 +54,19 @@ mkdir -p data
 sqlite3 data/middleware.db < db/migrations/001_authentication.sql
 sqlite3 data/middleware.db < db/migrations/002_multi_agent_orchestration.sql
 sqlite3 data/middleware.db < db/migrations/003_agent_principals.sql
+sqlite3 data/middleware.db < db/migrations/004_agent_policy.sql
+sqlite3 data/middleware.db < db/migrations/005_agent_credentials.sql
 sqlite3 data/middleware.db < db/seeds/development_auth.sql
+sqlite3 data/middleware.db < db/seeds/development_policy.sql
 ```
 
 The orchestration migration references the auth-owned `users` and `audit_logs`
 tables. It must not create another identity table.
+
+The policy tables are part of this same database. The authentication boundary
+issues human sessions and Agent credentials; the policy gateway owns
+capability checks, approvals, and Agent action attribution. A credential token
+is returned only when it is issued and only its hash is stored in SQLite.
 
 ## Agent ownership
 
@@ -66,7 +87,10 @@ The authentication layer owns:
 - `user_roles`;
 - `permissions`;
 - `auth_sessions`; and
-- the base `audit_logs` table.
+- the base `audit_logs` table;
+- `agent_principals` and `agent_principal_credentials`;
+- `agent_capabilities`, `agent_approval_requests`, and `agent_action_logs`; and
+- the seeded `mock_resources` used by the policy demonstration.
 
 The auth module should expose an authorization function to the orchestration
 module instead of making the orchestration code understand roles or sessions:
@@ -94,3 +118,22 @@ Permission lookup uses this order:
 
 Every allow or deny decision must insert an `audit_logs` row. Never trust a
 `user_id` supplied by the browser; derive it from the validated session.
+
+## Policy verification endpoints
+
+After the server has been restarted and the migrations have run, these routes
+make the security boundary easy to demonstrate:
+
+- `POST /api/agents/:id/credentials` issues a short-lived Agent credential;
+- `POST /api/agents/:id/capabilities` delegates `read` or `write` access to a
+  specific mock resource;
+- `POST /api/agent/tool-calls` authenticates with
+  `X-Agent-Principal-Token`, not the human bearer session;
+- `POST /api/agents/:id/approvals/:approvalId/approve` approves a pending write;
+- `POST /api/agents/:id/capabilities/:capabilityId/revoke` revokes delegated
+  access; and
+- `POST /api/agents/:id/credentials/:credentialId/revoke` revokes the Agent
+  credential itself.
+
+See [`docs/AUTHENTICATION_VERIFICATION.md`](../docs/AUTHENTICATION_VERIFICATION.md)
+for copy/paste checks and expected status codes.

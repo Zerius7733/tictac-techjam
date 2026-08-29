@@ -8,9 +8,10 @@ Run it locally with Docker, Colima, or rootless Podman, or deploy it to
 Volcengine ECS.
 
 > [!WARNING]
-> This is a single-user proof of concept. It intentionally has no identity,
-> tracing, audit, or hardened sandbox middleware. Do not use production data or
-> credentials. See [SECURITY.md](SECURITY.md).
+> This is a hackathon proof of concept with demo identity, authorization, and
+> audit controls. It is not a production identity provider or hardened
+> multi-tenant sandbox. Do not use production data or credentials. See
+> [SECURITY.md](SECURITY.md).
 
 ## Screenshots
 
@@ -27,6 +28,8 @@ Volcengine ECS.
 - React and TypeScript Web UI
 - Agent create, edit, start, stop, delete, and multi-turn chat
 - Fastify control plane with asynchronous Run state
+- Database-backed Alice/Bob login, Agent ownership, delegated capabilities,
+  approvals, and revocable Agent credentials
 - Persistent Agent workspaces and Codex sessions
 - Disposable Docker, Colima, or Podman container for each local turn
 - Docker and Terraform deployment paths for Volcengine ECS
@@ -104,6 +107,9 @@ In development, the server automatically initializes `data/auth.db` and shows
 the login screen. Use `alice / alice-demo-2026` or `bob / bob-demo-2026` for the
 seeded demo accounts. If `APP_AUTH_TOKEN` is configured, enter that platform
 token first and then sign in with one of these accounts.
+
+To demonstrate the full authentication and Agent policy boundary, follow the
+[authentication verification guide](docs/AUTHENTICATION_VERIFICATION.md).
 
 ### 5. Stop and resume
 

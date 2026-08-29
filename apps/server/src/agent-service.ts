@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { AuthStore } from "./auth-store.js";
+import type { AgentRuntimeIdentity, AuthStore } from "./auth-store.js";
+import { AgentPolicyGateway } from "./agent-policy-gateway.js";
 import type { AppConfig } from "./config.js";
 import { isArkConfigured } from "./config.js";
 import { HttpError, RunCancelledError } from "./errors.js";
@@ -13,6 +14,7 @@ import type {
   UpdateAgentInput,
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
+import { parseProtectedResourceIntent } from "./protected-resource-intent.js";
 
 const now = () => new Date().toISOString();
 
@@ -26,6 +28,7 @@ export class AgentService {
     private readonly workspaces: WorkspaceManager,
     private readonly runner: AgentRunner,
     private readonly authStore?: AuthStore,
+    private readonly policyGateway?: AgentPolicyGateway,
   ) {}
 
   async initialize(): Promise<void> {
@@ -193,9 +196,11 @@ export class AgentService {
     prompt: string,
     ownerUserId?: string,
     includeAll = false,
+    agentIdentity?: AgentRuntimeIdentity,
   ): Promise<{ run: AgentRun; message: Message }> {
     this.getAgent(agentId, ownerUserId, includeAll);
-    if (!isArkConfigured(this.config)) {
+    const protectedIntent = parseProtectedResourceIntent(prompt);
+    if (!protectedIntent && !isArkConfigured(this.config)) {
       throw new HttpError(
         503,
         "Ark is not configured. Set ARK_API_KEY and ARK_MODEL, then restart.",
@@ -242,7 +247,7 @@ export class AgentService {
       storedAgent.updatedAt = timestamp;
       return snapshot;
     });
-    const execution = this.executeRun(agentAtStart, run);
+    const execution = this.executeRun(agentAtStart, run, agentIdentity, protectedIntent);
     this.activeExecutions.set(agentId, execution);
     void execution
       .finally(() => {
@@ -273,7 +278,12 @@ export class AgentService {
     };
   }
 
-  private async executeRun(agentAtStart: Agent, run: AgentRun): Promise<void> {
+  private async executeRun(
+    agentAtStart: Agent,
+    run: AgentRun,
+    agentIdentity?: AgentRuntimeIdentity,
+    protectedIntent = parseProtectedResourceIntent(run.prompt),
+  ): Promise<void> {
     await this.store.mutate((database) => {
       const storedRun = database.runs.find((item) => item.id === run.id);
       if (storedRun) {
@@ -285,12 +295,14 @@ export class AgentService {
       if (this.cancellationRequests.has(agentAtStart.id)) {
         throw new RunCancelledError();
       }
-      const result = await this.runner.run({
-        agentId: agentAtStart.id,
-        workspacePath: agentAtStart.workspacePath,
-        prompt: run.prompt,
-        threadId: agentAtStart.codexThreadId,
-      });
+      const result = protectedIntent
+        ? this.runProtectedResourceRequest(agentAtStart, protectedIntent, agentIdentity)
+        : await this.runner.run({
+            agentId: agentAtStart.id,
+            workspacePath: agentAtStart.workspacePath,
+            prompt: run.prompt,
+            threadId: agentAtStart.codexThreadId,
+          });
       const completedAt = now();
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
@@ -334,6 +346,52 @@ export class AgentService {
         }
       });
     }
+  }
+
+  private runProtectedResourceRequest(
+    agent: Agent,
+    intent: NonNullable<ReturnType<typeof parseProtectedResourceIntent>>,
+    identity?: AgentRuntimeIdentity,
+  ) {
+    if (!identity) {
+      return {
+        output:
+          "I couldn’t access that protected record because this conversation did not provide the Agent’s credential. Issue an Agent credential, then try again.",
+        threadId: agent.codexThreadId,
+        usage: null,
+      };
+    }
+    if (!this.policyGateway) {
+      throw new HttpError(503, "Agent policy is not configured");
+    }
+
+    const decision = this.policyGateway.executeAsAgent(identity, agent, intent);
+    if (decision.status === "allowed") {
+      return {
+        output: [
+          `I accessed ${decision.resource.resourceKey} through the protected resource gateway.`,
+          "",
+          decision.resource.value ?? "",
+          "",
+          `Policy decision: ${decision.reasonCode}`,
+        ].join("\n"),
+        threadId: agent.codexThreadId,
+        usage: null,
+      };
+    }
+
+    return {
+      output: [
+        `I couldn’t access ${intent.resourceKey}. The backend policy gateway denied the Agent request.`,
+        "",
+        `Policy decision: ${decision.reasonCode}`,
+        decision.status === "approval_required"
+          ? "Open Security & Policy to review the pending human approval."
+          : "The Agent needs an active capability for this exact resource and action.",
+      ].join("\n"),
+      threadId: agent.codexThreadId,
+      usage: null,
+    };
   }
 
   private async setStatus(
