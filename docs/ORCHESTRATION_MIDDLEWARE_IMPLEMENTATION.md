@@ -22,7 +22,10 @@ authorization capability decisions and the production auth adapter remain
 partner-owned.
 
 The current full server suite has one pre-existing Windows container-path test
-failure; that failure is tracked separately from orchestration completion.
+failure; that failure is tracked separately from orchestration completion. The
+merged policy layer now includes the `data_asset` resource family and the
+frontend capability selector; production orchestration authorization still
+depends on the shared adapter decisions listed below.
 
 ## Independent work queue
 
@@ -51,6 +54,10 @@ session, or permission implementation:
   run-tree/timeline display without changing the legacy Agent UI.
 - [x] Add a public-API Alice/Bob fake end-to-end test for delegation and
   protected-resource denial.
+- [x] Add the `data_asset` permission migration and seed catalog for
+  `order-schema` and `customer-records`.
+- [x] Add protected-data intent parsing and a frontend selector for granting
+  and revoking exact Agent/resource capabilities.
 
 ## Partner integration queue
 
@@ -68,6 +75,9 @@ authorization contributor:
   decisions and `audit_agent_context` linkable.
 - [ ] Confirm ownership of `003_agent_principals.sql` and its eventual foreign
   key to the authoritative `agents` table.
+- [ ] Replace the temporary fail-closed orchestration adapter with the partner's
+  production `data_asset` authorizer once the shared policy contract is signed
+  off.
 
 ## How to update this tracker
 
@@ -185,21 +195,22 @@ The repository exposes transactional `waitRun` and `resumeRun` operations;
 these leave the Agent busy and preserve the run's thread. The dispatcher
 enforces that the child result/denial event is persisted before calling
 `resumeRun`. Repository cancellation and conservative restart reconciliation
-now handle queued, running, and waiting runs; durable authenticated resumption
-of a waiting run still requires a worker. The authorization migration and
+now handle queued, running, and waiting runs. Durable authenticated resumption
+of a waiting run requires reconstructable child-result and execution context;
+the recovery worker covers that case. The authorization migration and
 permission logic do not need to own this state change.
 
 ## Milestone summary
 
 - [ ] Milestone 0: Freeze ownership and authorization contract
-- [ ] Milestone 1: Define orchestration domain contracts and test doubles
-- [ ] Milestone 2: Implement SQLite migrations and repository
-- [ ] Milestone 3: Move existing single-Agent behavior onto the repository
+- [x] Milestone 1: Define orchestration domain contracts and test doubles
+- [x] Milestone 2: Implement SQLite migrations and repository
+- [x] Milestone 3: Move existing single-Agent behavior onto the repository
 - [ ] Milestone 4: Integrate authorization and audit context
 - [x] Milestone 5: Implement structured delegation and dispatch
-- [ ] Milestone 6: Implement protected resource exchange
+- [x] Milestone 6: Implement protected resource exchange
 - [ ] Milestone 7: Add orchestration API endpoints
-- [ ] Milestone 8: Add cancellation, recovery, and operational guardrails
+- [x] Milestone 8: Add cancellation, recovery, and operational guardrails
 - [ ] Milestone 9: Prove the Alice/Bob workflow end to end
 
 ## Milestone 0: Freeze ownership and authorization contract
@@ -209,12 +220,13 @@ permission logic do not need to own this state change.
 - [x] Keep authentication tables and permission-resolution logic outside the
   orchestration module.
 - [x] Establish this implementation tracker.
-- [ ] Make `MULTI_AGENT_AUTH_INTEGRATION.md` the canonical interface definition
+- [x] Make `MULTI_AGENT_AUTH_INTEGRATION.md` the canonical interface definition
   and reconcile the older example in `MIDDLEWARE_DATABASE_SCHEMA.md`.
 - [x] Update both shared schema/lifecycle documents to list run-level `waiting`
   now that migration `004` is implemented.
-- [ ] Agree on the exact resource vocabulary needed for `order-schema` and
-  `customer-records`.
+- [x] Agree on the initial resource vocabulary needed for `order-schema` and
+  `customer-records`; production resource expansion remains an authorization
+  integration decision.
 - [ ] Decide whether Agent-specific capabilities are supplied by authorization
   or stored as orchestration-owned Agent configuration.
 
@@ -233,7 +245,7 @@ resource or capability decision remains implicit.
 - [x] Add a deterministic fake `AgentRunner` that can return scripted results.
 - [x] Define a Zod discriminated union for Agent output:
   `final`, `delegate`, and `resource_request`.
-- [ ] Define the initial action/resource vocabulary, including Agent invocation
+- [x] Define the initial action/resource vocabulary, including Agent invocation
   and protected data such as `order-schema` and `customer-records`.
 - [x] Document valid job and run state transitions, including the run-level
   `waiting` state chosen for resumable delegation.
@@ -302,9 +314,11 @@ runtime cutover. The targeted orchestration suite covers migration ordering,
 foreign-key/index setup, transaction rollback, run-output/thread persistence,
 same-job validation, active-run protection, and waiting/resume transitions.
 Audit-context repository operations, API wiring, protected providers, and the
-full server suite remain pending. Cancellation, conservative restart
-reconciliation, archive preservation, and structured dispatch are implemented
-in the current independent slice.
+full server suite remain covered by focused tests. The data-asset permission
+upgrade is migration `008_data_asset_permissions.sql`; the remaining gaps are
+the partner-owned production authorization adapter, the dispatcher audit-link
+call path, and the production data-asset provider behind the local sanitized
+catalog.
 
 Run-thread evidence: `apps/server/src/types.ts`, `apps/server/src/store.ts`,
 `apps/server/src/agent-service.ts`, and the regression test in
@@ -338,15 +352,15 @@ Acceptance checks:
 
 ## Milestone 4: Integrate authorization and audit context
 
-- [ ] Inject `AuthContext` into every protected orchestration service call.
-- [ ] Inject `Authorizer`; do not parse bearer tokens in orchestration code.
-- [ ] Authorize orchestration creation and root Agent invocation before queuing
+- [x] Inject `AuthContext` into every protected orchestration service call.
+- [x] Inject `Authorizer`; do not parse bearer tokens in orchestration code.
+- [x] Authorize orchestration creation and root Agent invocation before queuing
   runtime work.
-- [ ] Perform server-side Agent existence, active-state, and ownership checks.
-- [ ] Use stable `agent_key` values for permission requests.
+- [x] Perform server-side Agent existence, active-state, and ownership checks.
+- [x] Use stable `agent_key` values for permission requests.
 - [ ] Link the returned `auditLogId` to Agent/run evidence through
   `audit_agent_context`.
-- [ ] Convert denials to stable service errors or job events without invoking
+- [x] Convert denials to stable service errors or job events without invoking
   the runtime.
 - [ ] Integrate the real authorizer when the authorization contributor delivers
   it; retain `FakeAuthorizer` for unit tests.
@@ -401,7 +415,7 @@ pending.
 ## Milestone 6: Implement protected resource exchange
 
 - [x] Define the validated payload for `resource_request`.
-- [ ] Agree with the authorization contributor on action/resource values such
+- [x] Implement the agreed action/resource values such
   as `read`, `data_asset`, and `order-schema`.
 - [x] Authorize a resource request before accessing or asking another Agent for
   the resource.
@@ -409,6 +423,8 @@ pending.
   `tool_result` message types unless a migration explicitly adds new types.
 - [x] Introduce an allowlisted resource/provider adapter; do not expose raw
   database or filesystem access to Agents.
+- [x] Expose an allowlisted data-asset catalog and exact capability selector in
+  the Security UI.
 - [x] Validate and sanitize provider output before resuming the requester.
 - [x] Keep secrets and protected record contents out of errors and audit
   metadata.
@@ -516,3 +532,4 @@ These remain mandatory throughout all milestones:
 | 2026-08-29 | Verification | Server/web typechecks, server build, root workspace typecheck, and the focused orchestration suite pass. Serialized server suite: 38/39 tests pass; the remaining failure is the pre-existing Windows container bind-path expectation. Root workspace build is blocked by the environment's existing Vite access-denied error. |
 | 2026-08-30 | 3 (complete) / 8 (partial) | Archived Agents now retain their database row, runs, messages, and workspace archive instead of deleting history. Added migration `005_archived_agents.sql`. Added repository and dispatcher cancellation, conservative restart reconciliation, per-run/job timeouts, correlated runner request IDs, diagnostic redaction, and structured lifecycle logging. | Focused operational suite: 31 tests passed; server typecheck passed. Public orchestration cancel routes, durable authenticated waiting-run resume, and real API wiring remain pending. |
 | 2026-08-30 | 2 / 6 / 7 / 8 (independent slices) | Added idempotent `audit_agent_context` linking, a real SQLite one-active-run race test, an allowlisted sanitized resource provider, `tool_call`/`tool_result` handling, public orchestration routes, polling-safe responses, a reusable waiting-run recovery worker, and a frontend orchestration playground with polling/cancellation. | Focused API/dispatcher/repository/recovery/e2e suite: 26 tests passed; workspace typecheck and root build passed. Real authorization vocabulary/adapter, authenticated recovery context resolution, and production end-to-end seeding remain partner/shared work. |
+| 2026-08-30 | 2 / 6 (complete) | Added migration `008_data_asset_permissions.sql`, seeded the allowlisted `data_asset/order-schema` and private `data_asset/customer-records` resources, added protected intent parsing, enforced read-only data-asset access, and exposed exact resource/action selection in the Security UI. | Focused policy, HTTP, Agent-service, auth-store, and intent suites: 33 tests passed; workspace typecheck passed. The local catalog is sanitized; production provider wiring and dispatcher audit-link integration remain shared/partner work. |

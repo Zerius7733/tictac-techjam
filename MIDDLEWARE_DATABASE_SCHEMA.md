@@ -1260,6 +1260,7 @@ Use one ordered migration sequence rather than merging database files:
 005_archived_agents.sql                # preserve Agent history on archive
 006_agent_policy.sql                   # capabilities, approvals, mock resources
 007_agent_credentials.sql              # hashed, revocable Agent credentials
+008_data_asset_permissions.sql         # human permissions for protected assets
 ```
 
 The migration runner also recognizes databases created by the earlier policy

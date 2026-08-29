@@ -81,7 +81,7 @@ const credentialBody = z.object({
   expiresInSeconds: z.number().int().min(60).max(86_400).default(3_600),
 });
 
-type ResourceType = "agent" | "run" | "orchestration" | "system";
+type ResourceType = "agent" | "run" | "orchestration" | "system" | "data_asset";
 
 export interface OrchestrationHttpDependencies {
   repository: OrchestrationRepository;

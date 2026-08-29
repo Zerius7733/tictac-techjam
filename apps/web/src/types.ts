@@ -129,7 +129,8 @@ export interface MockResource {
   resourceKey: string;
   ownerUserId: string | null;
   sensitivity: "private" | "shared";
-  value: string;
+  /** Resource listings intentionally omit protected values. */
+  value?: string;
   createdAt: string;
   updatedAt: string;
 }

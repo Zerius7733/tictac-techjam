@@ -13,6 +13,7 @@ sqlite3 data/auth.db < db/migrations/001_authentication.sql
 sqlite3 data/auth.db < db/migrations/003_agent_principals.sql
 sqlite3 data/auth.db < db/migrations/006_agent_policy.sql
 sqlite3 data/auth.db < db/migrations/007_agent_credentials.sql
+sqlite3 data/auth.db < db/migrations/008_data_asset_permissions.sql
 sqlite3 data/auth.db < db/seeds/development_auth.sql
 sqlite3 data/auth.db < db/seeds/development_policy.sql
 ```
@@ -61,6 +62,7 @@ sqlite3 data/auth.db < db/migrations/004_waiting_agent_runs.sql
 sqlite3 data/auth.db < db/migrations/005_archived_agents.sql
 sqlite3 data/auth.db < db/migrations/006_agent_policy.sql
 sqlite3 data/auth.db < db/migrations/007_agent_credentials.sql
+sqlite3 data/auth.db < db/migrations/008_data_asset_permissions.sql
 sqlite3 data/auth.db < db/seeds/development_auth.sql
 sqlite3 data/auth.db < db/seeds/development_policy.sql
 ```

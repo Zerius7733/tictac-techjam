@@ -12,6 +12,8 @@ Delegated policy is defined by
 [006_agent_policy.sql](../db/migrations/006_agent_policy.sql), and independent
 runtime credentials by
 [007_agent_credentials.sql](../db/migrations/007_agent_credentials.sql).
+The human permission expansion for protected data assets is defined by
+[008_data_asset_permissions.sql](../db/migrations/008_data_asset_permissions.sql).
 
 ## Ownership boundary
 
@@ -151,7 +153,7 @@ type Authorization = {
 authorize(
   context: AuthContext,
   action: string,
-  resourceType: 'agent' | 'run' | 'orchestration' | 'system',
+  resourceType: 'agent' | 'run' | 'orchestration' | 'system' | 'data_asset',
   resourceKey: string,
 ): Promise<Authorization>;
 ```
@@ -176,7 +178,8 @@ resolver.
 
 Apply the migrations in order: authentication (`001`), orchestration (`002`),
 independent Agent identities (`003`), waiting/archive upgrades (`004`/`005`),
-delegated policy (`006`), and Agent credentials (`007`). The combined runtime
+delegated policy (`006`), Agent credentials (`007`), and data-asset permissions
+(`008`). The combined runtime
 uses one SQLite database and imports legacy JSON only when that database is
 empty. The `agent_id` foreign key can be tightened after SQLite Agents are
 authoritative. Do not create a second

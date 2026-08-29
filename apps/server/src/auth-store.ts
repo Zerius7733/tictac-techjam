@@ -29,6 +29,10 @@ const defaultAgentCredentialMigrationPath = path.join(
   repositoryRoot,
   "db/migrations/007_agent_credentials.sql",
 );
+const defaultDataAssetPermissionMigrationPath = path.join(
+  repositoryRoot,
+  "db/migrations/008_data_asset_permissions.sql",
+);
 
 export interface AuthUser {
   id: string;
@@ -156,6 +160,8 @@ export class AuthStore {
     private readonly seedPath = defaultSeedPath,
     private readonly agentPrincipalMigrationPath = defaultAgentPrincipalMigrationPath,
     private readonly agentCredentialMigrationPath = defaultAgentCredentialMigrationPath,
+    private readonly dataAssetPermissionMigrationPath =
+      defaultDataAssetPermissionMigrationPath,
   ) {}
 
   async initialize(seedDevelopment: boolean): Promise<void> {
@@ -165,6 +171,12 @@ export class AuthStore {
     this.database.exec(await readFile(this.migrationPath, "utf8"));
     this.database.exec(await readFile(this.agentPrincipalMigrationPath, "utf8"));
     this.database.exec(await readFile(this.agentCredentialMigrationPath, "utf8"));
+    const dataAssetMigration = this.database
+      .prepare("SELECT 1 AS applied FROM schema_migrations WHERE version = 8")
+      .get() as { applied?: number } | undefined;
+    if (!dataAssetMigration) {
+      this.database.exec(await readFile(this.dataAssetPermissionMigrationPath, "utf8"));
+    }
     if (seedDevelopment) {
       this.database.exec(await readFile(this.seedPath, "utf8"));
     }
@@ -503,7 +515,7 @@ export class AuthStore {
   authorize(
     context: AuthContext,
     action: string,
-    resourceType: "agent" | "run" | "orchestration" | "system",
+    resourceType: "agent" | "run" | "orchestration" | "system" | "data_asset",
     resourceKey: string,
   ): AuthorizationResult {
     const rows = this.db()

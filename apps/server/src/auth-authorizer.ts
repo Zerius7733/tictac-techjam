@@ -5,13 +5,17 @@ import type {
   Authorizer,
 } from "./orchestration-contracts.js";
 
-type AuthResourceType = "agent" | "run" | "orchestration" | "system";
+type AuthResourceType =
+  | "agent"
+  | "run"
+  | "orchestration"
+  | "system"
+  | "data_asset";
 
 /**
- * Composition-root adapter while the authorization contributor finalizes the
- * wider resource vocabulary. Unsupported resource types fail closed; the
- * partner-owned AuthStore can later replace this adapter without changing the
- * dispatcher or HTTP layer.
+ * Composition-root adapter for the shared authorization contract. Unknown
+ * resource families still fail closed; the protected data-asset family is
+ * handled by AuthStore after migration 008.
  */
 export class AuthStoreAuthorizer implements Authorizer {
   constructor(private readonly authStore: AuthStore) {}
@@ -39,5 +43,11 @@ export class AuthStoreAuthorizer implements Authorizer {
 }
 
 function isAuthResourceType(value: string): value is AuthResourceType {
-  return value === "agent" || value === "run" || value === "orchestration" || value === "system";
+  return (
+    value === "agent" ||
+    value === "run" ||
+    value === "orchestration" ||
+    value === "system" ||
+    value === "data_asset"
+  );
 }

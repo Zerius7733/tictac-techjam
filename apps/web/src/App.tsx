@@ -141,6 +141,8 @@ function SecurityPanel({
   }, [refresh]);
 
   const selectedResource = resources.find((resource) => resource.resourceKey === resourceKey);
+  const availableActions: PolicyAction[] =
+    selectedResource?.resourceType === "data_asset" ? ["read"] : ["read", "write"];
   const activeCapabilities = capabilities.filter(
     (capability) =>
       !capability.revokedAt && new Date(capability.expiresAt).getTime() > Date.now(),
@@ -315,20 +317,32 @@ function SecurityPanel({
               <span className="security-count">{activeCapabilities.length} active</span>
             </div>
             <p className="security-copy">
-              A capability is exact: one Agent, one resource, and one action. A write capability lets the Agent update that resource.
+              A capability is exact: one Agent, one resource, and one action. Data
+              assets are allowlisted and read-only; other demo records can also
+              receive a write capability.
             </p>
             <label>
               Protected resource
-              <select value={resourceKey} onChange={(event) => setResourceKey(event.target.value)}>
+              <select
+                value={resourceKey}
+                onChange={(event) => {
+                  const nextKey = event.target.value;
+                  setResourceKey(nextKey);
+                  const nextResource = resources.find(
+                    (resource) => resource.resourceKey === nextKey,
+                  );
+                  if (nextResource?.resourceType === "data_asset") setAction("read");
+                }}
+              >
                 {resources.map((resource) => (
                   <option key={resource.resourceKey} value={resource.resourceKey}>
-                    {resource.resourceKey} · {resource.sensitivity}
+                    {resource.resourceType} · {resource.resourceKey} · {resource.sensitivity}
                   </option>
                 ))}
               </select>
             </label>
             <div className="action-choice" role="group" aria-label="Capability action">
-              {(["read", "write"] as PolicyAction[]).map((option) => (
+              {availableActions.map((option) => (
                 <button
                   type="button"
                   key={option}
@@ -353,7 +367,9 @@ function SecurityPanel({
                 capabilities.map((capability) => (
                   <div className="security-list-row" key={capability.id}>
                     <div>
-                      <strong>{capability.action} · {capability.resourceKey}</strong>
+                      <strong>
+                        {capability.action} · {capability.resourceType} · {capability.resourceKey}
+                      </strong>
                       <span>
                         {capability.revokedAt
                           ? "Revoked"

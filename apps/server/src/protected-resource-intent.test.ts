@@ -30,6 +30,19 @@ describe("protected resource intent", () => {
     });
   });
 
+  it("recognizes the allowlisted data-asset resources", () => {
+    expect(parseProtectedResourceIntent("read the order API contract")).toEqual({
+      resourceType: "data_asset",
+      resourceKey: "order-schema",
+      action: "read",
+    });
+    expect(parseProtectedResourceIntent("show customer records")).toEqual({
+      resourceType: "data_asset",
+      resourceKey: "customer-records",
+      action: "read",
+    });
+  });
+
   it("recognizes a write without inventing a value", () => {
     expect(parseProtectedResourceIntent("write to alice-private-note")).toEqual({
       resourceType: "mock_record",
