@@ -72,7 +72,7 @@ describe("AgentPolicyGateway", () => {
       reasonCode: "capability_not_granted",
     });
 
-    const capability = system.gateway.grantCapability(
+    const approval = system.gateway.requestCapability(
       system.context,
       system.agent,
       {
@@ -82,6 +82,13 @@ describe("AgentPolicyGateway", () => {
         expiresInSeconds: 3_600,
       },
     );
+    const verification = system.gateway.verifyCapability(
+      system.context,
+      system.agent,
+      approval.id,
+      "246810",
+    );
+    const capability = verification.capability!;
     expect(capability.agentPrincipalId).toBe(system.agent.principalId);
 
     const allowed = system.gateway.execute(system.context, system.agent, {
@@ -105,7 +112,7 @@ describe("AgentPolicyGateway", () => {
     const system = await makePolicySystem();
 
     expect(() =>
-      system.gateway.grantCapability(system.context, system.agent, {
+      system.gateway.requestCapability(system.context, system.agent, {
         action: "read",
         resourceType: "mock_record",
         resourceKey: "bob-private-note",
@@ -124,18 +131,46 @@ describe("AgentPolicyGateway", () => {
     });
   });
 
+  it.each(["read", "write"] as const)(
+    "does not allow the direct %s capability endpoint to bypass authenticator approval",
+    async (action) => {
+    const system = await makePolicySystem();
+
+    expect(() =>
+      system.gateway.grantCapability(system.context, system.agent, {
+        action,
+        resourceType: "mock_record",
+        resourceKey: "alice-private-note",
+        expiresInSeconds: 3_600,
+      }),
+    ).toThrow("require authenticator verification");
+    },
+  );
+
   it("allows writes with an active write capability and honors revocation", async () => {
     const system = await makePolicySystem();
-    const capability = system.gateway.grantCapability(
+    const approval = system.gateway.requestWriteCapability(
       system.context,
       system.agent,
       {
-        action: "write",
         resourceType: "mock_record",
         resourceKey: "alice-private-note",
         expiresInSeconds: 3_600,
       },
     );
+    expect(approval).toMatchObject({ status: "pending", action: "write" });
+    const verification = system.gateway.verifyWriteCapability(
+      system.context,
+      system.agent,
+      approval.id,
+      "246810",
+    );
+    expect(verification).toMatchObject({
+      approved: true,
+      reasonCode: "authenticator_verified",
+      capability: { action: "write" },
+    });
+    const capability = verification.capability!;
 
     const completed = system.gateway.execute(system.context, system.agent, {
       action: "write",
@@ -165,6 +200,33 @@ describe("AgentPolicyGateway", () => {
     const logs = system.gateway.listActionLogs(system.agent);
     expect(logs.some((log) => log.resultCode === "write_completed")).toBe(true);
     expect(logs.every((log) => log.metadata.targetValueLogged === false)).toBe(true);
+  });
+
+  it("denies an incorrect authenticator code without creating write access", async () => {
+    const system = await makePolicySystem();
+    const approval = system.gateway.requestWriteCapability(system.context, system.agent, {
+      resourceType: "mock_record",
+      resourceKey: "alice-private-note",
+      expiresInSeconds: 3_600,
+    });
+
+    const result = system.gateway.verifyWriteCapability(
+      system.context,
+      system.agent,
+      approval.id,
+      "000000",
+    );
+    expect(result).toMatchObject({
+      approved: false,
+      reasonCode: "authenticator_invalid",
+      approval: { status: "denied" },
+    });
+    expect(system.policyStore.findActiveCapability(
+      system.agent.principalId!,
+      "mock_record",
+      "alice-private-note",
+      "write",
+    )).toBeNull();
   });
 
   it("executes through a separate, revocable Agent credential", async () => {
@@ -199,12 +261,13 @@ describe("AgentPolicyGateway", () => {
       reasonCode: "capability_not_granted",
     });
 
-    system.gateway.grantCapability(system.context, system.agent, {
+    const readApproval = system.gateway.requestCapability(system.context, system.agent, {
       action: "read",
       resourceType: "mock_record",
       resourceKey: "alice-private-note",
       expiresInSeconds: 3_600,
     });
+    system.gateway.verifyCapability(system.context, system.agent, readApproval.id, "246810");
     const allowed = system.gateway.executeAsAgent(identity!, system.agent, {
       action: "read",
       resourceType: "mock_record",

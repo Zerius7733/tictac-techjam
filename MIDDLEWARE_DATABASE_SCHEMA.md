@@ -28,7 +28,8 @@ The database must support:
 8. storing prompts, progress events, results, and errors in order; and
 9. giving each Agent an independent, revocable runtime identity;
 10. delegating narrow capabilities to Agent identities;
-11. supporting optional human approval for selected high-risk writes; and
+11. requiring a short-lived human authenticator approval before issuing an
+    Agent read or write capability; and
 12. surviving a server restart without losing the execution history.
 
 It does **not** attempt to be a production identity provider, workflow engine,
@@ -91,6 +92,7 @@ erDiagram
     roles ||--o{ permissions : grants
     users ||--o{ auth_sessions : owns
     users ||--o{ audit_logs : causes
+    users ||--o| user_authenticator_codes : verifies
     users ||--o{ agents : owns
     users ||--o{ agent_principals : owns
     agents ||--|| agent_principals : identifies
@@ -279,6 +281,24 @@ records even when a user or agent is later deactivated.
 Do not write passwords, raw bearer tokens, API keys, or full secret-bearing
 prompts into `metadata_json`.
 
+### 5.7.1 `user_authenticator_codes`
+
+Development-only second-factor records used when a human delegates write
+access through the protected chat. The current hackathon implementation uses
+a deterministic six-digit code per seeded user to stand in for an authenticator
+app. Only a SHA-256 hash is stored; the code is never sent to the Agent model
+or written to an audit record.
+
+| Column | Type | Constraints | Meaning |
+| --- | --- | --- | --- |
+| `user_id` | `TEXT` | Primary key, foreign key to `users.id` with `ON DELETE CASCADE` | Human whose code is being verified |
+| `code_hash` | `TEXT` | Not null | SHA-256 hash of the development six-digit code |
+| `created_at` | `TEXT` | Not null, default UTC now | Setup time |
+| `updated_at` | `TEXT` | Not null, default UTC now | Last setup/change time |
+
+The production replacement for this table should store a protected TOTP
+secret or WebAuthn credential rather than a fixed development code.
+
 ### 5.8 `agents`
 
 Registry and current runtime state for each available agent.
@@ -306,7 +326,7 @@ runs remain queryable.
 ### 5.8.1 `agent_principals`
 
 Independent identity for an Agent. This is deliberately separate from the
-human `users` identity and is the future anchor for delegated capabilities and
+human `users` identity and is the anchor for delegated capabilities and
 runtime credentials. In the current JSON-backed POC, `agent_id` is enforced by
 the application because the Agent registry is not yet in the same SQLite
 database.
@@ -385,27 +405,31 @@ boundary.
 
 ### 5.8.5 `agent_approval_requests`
 
-Represents a human approval boundary for a proposed Agent write. The current
-mock implementation stores the proposed mock value so the demo can approve
-the exact operation. Real integrations should store a hash or a reviewed,
-redacted summary instead of a secret-bearing payload.
+Represents the human approval boundary for an Agent read or write capability
+request. The current protected-chat flow creates a pending row, asks the
+signed-in human for the six-digit authenticator code, and marks the row
+approved only after backend verification. The `input_text` value is an
+internal request type, not the authenticator code or the note contents.
 
 | Column | Type | Constraints | Meaning |
 | --- | --- | --- | --- |
 | `id` | `TEXT` | Primary key | Approval UUID |
-| `agent_principal_id` | `TEXT` | Not null, foreign key to `agent_principals.id` with `ON DELETE CASCADE` | Agent requesting the write |
+| `agent_principal_id` | `TEXT` | Not null, foreign key to `agent_principals.id` with `ON DELETE CASCADE` | Agent requesting access |
 | `requested_by_user_id` | `TEXT` | Not null, foreign key to `users.id` with `ON DELETE CASCADE` | Human owner on whose behalf it was requested |
 | `action` | `TEXT` | Not null; `read` or `write` | Requested operation |
 | `resource_type` | `TEXT` | Not null | Target resource family |
 | `resource_key` | `TEXT` | Not null | Target resource key |
-| `input_text` | `TEXT` | Not null, default empty string | Exact proposed mock write |
+| `input_text` | `TEXT` | Not null, default empty string | Redacted request type, such as `capability:<approval-group-id>:read:3600` |
 | `status` | `TEXT` | Not null; `pending`, `approved`, `denied`, `expired`, or `consumed` | Approval lifecycle |
 | `expires_at` | `TEXT` | Not null | Approval deadline |
 | `decided_by_user_id` | `TEXT` | Nullable, foreign key to `users.id` with `ON DELETE SET NULL` | Human decision maker |
 | `decided_at` | `TEXT` | Nullable | Decision time |
 | `created_at` | `TEXT` | Not null, default UTC now | Request time |
 
-Approval is one-time: a successful write changes `approved` to `consumed`.
+For a capability request, the approval is marked `approved` when the
+authenticator check succeeds and creates the requested exact capability. A
+wrong code marks the request `denied`; it never creates a capability. Direct
+API approval cannot bypass this check.
 
 ### 5.8.6 `agent_action_logs`
 
@@ -585,6 +609,14 @@ CREATE TABLE IF NOT EXISTS audit_logs (
     metadata_json  TEXT NOT NULL DEFAULT '{}',
     created_at     TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_authenticator_codes (
+    user_id     TEXT PRIMARY KEY,
+    code_hash   TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    updated_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS agents (
@@ -807,6 +839,9 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_user_time
 
 CREATE INDEX IF NOT EXISTS idx_audit_logs_resource_time
     ON audit_logs (resource_type, resource_key, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_user_authenticator_codes_updated
+    ON user_authenticator_codes (updated_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_agent_credentials_principal_status
     ON agent_principal_credentials (agent_principal_id, revoked_at, expires_at);
@@ -1045,11 +1080,11 @@ one.
 | `GET /api/agents/:id/runs` | `run:view` | Read runs for the agent |
 | `GET /api/runs/:id` | `run:view` | Read one run |
 | `POST /api/agents/:id/credentials` | `agent:delegate` | Issue a short-lived Agent credential; return the raw token once |
-| `POST /api/agents/:id/capabilities` | `agent:delegate` | Grant one exact Agent action on one resource |
+| `POST /api/agents/:id/capabilities` | `agent:delegate` | Guarded compatibility route; chat authenticator approval grants one exact Agent action on one resource |
 | `POST /api/agent/tool-calls` | Agent credential | Authenticate the Agent principal and evaluate its capability |
 | `GET /api/agents/:id/approvals` | `agent:view` | Read pending and completed approval requests |
-| `POST /api/agents/:id/approvals/:approvalId/approve` | `agent:approve` | Approve one pending proposed write |
-| `POST /api/agents/:id/approvals/:approvalId/deny` | `agent:approve` | Deny one pending proposed write |
+| `POST /api/agents/:id/approvals/:approvalId/approve` | `agent:approve` | Approve one pending non-authenticator request |
+| `POST /api/agents/:id/approvals/:approvalId/deny` | `agent:approve` | Deny one pending request |
 | `POST /api/agents/:id/capabilities/:capabilityId/revoke` | `agent:delegate` | Revoke delegated access immediately |
 | `POST /api/agents/:id/credentials/:credentialId/revoke` | `agent:delegate` | Revoke the Agent runtime credential immediately |
 | `GET /api/agents/:id/action-logs` | `agent:view` | Inspect Agent decisions and attribution |
@@ -1124,11 +1159,13 @@ Agent tool-call flow:
 4. Auth hashes the credential and loads the active Agent principal
 5. Policy gateway checks the exact resource/action capability
 6. Private-resource ownership is checked against the Agent owner
-7. A standard write executes when its exact write capability is active; a
-   high-risk write may additionally create or consume a human approval
-8. Agent action and base audit records capture the principal, capability,
-   optional approval, resource, decision, and result code
-9. Revoking the credential or capability changes the next request immediately
+7. A read or write capability request creates a pending approval and asks the
+   human for the six-digit authenticator code
+8. The backend verifies the code, then issues the requested exact capability;
+   a wrong code creates no capability
+9. Agent action and base audit records capture the principal, capability,
+   approval, resource, decision, and result code
+10. Revoking the credential or capability changes the next request immediately
 ```
 
 ## 11. Orchestration flow
@@ -1257,6 +1294,8 @@ Use one ordered migration sequence rather than merging database files:
 003_agent_principals.sql               # independent Agent identity
 004_agent_policy.sql                   # capabilities, approvals, mock resources
 005_agent_credentials.sql              # hashed, revocable Agent credentials
+006_authenticator_codes.sql            # hashed development authenticator codes
+007_authenticator_capability_enforcement.sql # invalidate pre-auth capabilities once
 ```
 
 If the contributors work on separate initial scripts, combine them manually

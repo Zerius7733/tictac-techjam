@@ -6,8 +6,10 @@ proves four separate boundaries:
 1. a human must log in before using the API;
 2. Agents belong to the human who created them;
 3. an Agent must use its own credential and an explicitly delegated capability;
-4. an Agent with an active write capability can update the exact delegated
-   resource, and every decision is attributable.
+4. read and write access are delegated only after the human passes a six-digit
+   authenticator check; and
+5. an Agent with an active delegated capability can access the exact resource,
+   with every decision attributable.
 
 The data is intentionally mock data. Do not use these demo credentials or
 mock-resource values for anything sensitive.
@@ -22,27 +24,31 @@ database:
    panel opens automatically.
 3. Click `Issue Agent credential`. The raw credential is shown once and kept
    only in the current browser tab.
-4. Under `Delegated capability`, choose `alice-private-note`, choose `Read`,
-   and click `Grant read capability`.
-5. Close the panel, select `Protected data` above the chat composer, and type
-   `Read Alice's private notes`. The assistant response should include the
-   Alice note and `Policy decision: read_completed`. This is the conversation
-   path using the same Agent credential and delegated capability.
-6. Reopen `Security & Policy`, revoke the active `alice-private-note` read
+4. Close the panel, select `Protected data` above the chat composer, and type
+   `Grant read access to Alice's private notes for 1 hour`. The Agent should
+   create a pending request and ask for the six-digit authenticator code.
+5. Reply with Alice's development code, `246810`. The Agent should confirm
+   that read access is enabled for one hour. Bob's development code is
+   `135790`.
+6. Type `Read Alice's private notes`. The assistant response should include
+   the Alice note and `Policy decision: read_completed`.
+7. Reopen `Security & Policy` and confirm the approved read request appears in
+   Authenticator history. Revoke the active `alice-private-note` read
    capability, close the panel, and send the same chat request again. The
    assistant should show `capability_not_granted` and no note value.
-7. Grant a `Write` capability for `alice-private-note`, close the panel, keep
-   `Protected data` selected, and type `Write into Alice's private notes,
-   changing it to Sahara means desert`. The assistant should confirm the
-   update with `Policy decision: write_completed`.
-8. Ask `Read Alice's private notes` and confirm the new value is returned.
-   Revoke the write capability and repeat the write; it should now show
-   `capability_not_granted`.
+8. In `Protected data` mode, type `Grant write access to Alice's private
+   notes for 1 hour`. Reply with `246810`, then type `Write into Alice's
+   private notes, changing it to Sahara means desert`.
+9. The assistant should confirm the update with
+   `Policy decision: write_completed`. Ask `Read Alice's private notes` and
+   confirm the new value is returned. Revoke the write capability and repeat
+   the write; it should now show `capability_not_granted`.
 
-The panel is intentionally focused on identity, credentials, and delegated
-capabilities. The duplicate direct policy-test card was removed; the
-conversation itself is now the user-facing policy test. The backend still
-enforces write capabilities through the policy gateway and automated/API checks.
+The panel is intentionally focused on identity, credentials, delegated
+capabilities, and authenticator history. The conversation is the user-facing
+read/write approval step. The backend still enforces every capability through
+the policy gateway and automated/API checks; the UI cannot grant access
+directly.
 
 While performing these steps, refresh `data/auth.db` in the SQLite viewer to
 observe `agent_capabilities`, `agent_approval_requests`, and
@@ -59,8 +65,12 @@ npm run dev
 ```
 
 If the server is already running, restart it once. Startup applies migrations
-`004_agent_policy.sql` and `005_agent_credentials.sql` and seeds the mock
-resources in development mode. If using Docker, rebuild it:
+`004_agent_policy.sql`, `005_agent_credentials.sql`, and
+`006_authenticator_codes.sql` and
+`007_authenticator_capability_enforcement.sql`, then seeds the mock resources
+in development mode. Existing capabilities are invalidated once on upgrade
+so they must be re-approved with the authenticator code. If using Docker,
+rebuild it:
 
 ```sh
 docker compose up --build
@@ -76,6 +86,7 @@ agent_capabilities
 agent_principal_credentials
 agent_principals
 mock_resources
+user_authenticator_codes
 ```
 
 ## 2. Log in as Alice
@@ -212,16 +223,25 @@ curl -i -X POST http://localhost:3000/api/agents/<AGENT_ID>/capabilities \
 Expected: HTTP `403`. This is the important server-side ownership check; it is
 not just a hidden UI item.
 
-## 6. Verify writes with a delegated capability
+## 6. Verify read and write access with authenticator-gated delegation
 
-Grant a write capability on Alice's note:
+The direct capability endpoint intentionally refuses to create either a read
+or write capability. Request access in the Protected data chat, then reply
+with the development authenticator code. For example:
 
 ```sh
-curl -s -X POST http://localhost:3000/api/agents/<AGENT_ID>/capabilities \
+curl -s -X POST http://localhost:3000/api/agents/<AGENT_ID>/messages \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer <ALICE_SESSION>' \
-  -d '{"resourceType":"mock_record","resourceKey":"alice-private-note","action":"write","expiresInSeconds":3600}'
+  -H 'X-Agent-Principal-Token: <AGENT_TOKEN>' \
+  -d '{"mode":"protected-data","content":"grant read access to alice-private-note for 1 hour"}'
 ```
+
+Reply with `246810` in the same conversation. The backend verifies the code,
+marks the `agent_approval_requests` row approved, and creates the requested
+read capability expiring one hour later. The same flow applies to write
+access. The raw code is never stored; only its hash is stored in
+`user_authenticator_codes`.
 
 Ask the Agent to write with the same Agent credential:
 
@@ -232,10 +252,12 @@ curl -i -X POST http://localhost:3000/api/agent/tool-calls \
   -d '{"action":"write","resourceType":"mock_record","resourceKey":"alice-private-note","inputText":"Approved replacement note"}'
 ```
 
-Expected: HTTP `200`, `reasonCode: "write_completed"`, and the mock resource
-value is updated. The active write capability is the authorization for this
-small demo. Approval tables and endpoints remain available for future
-high-risk actions that should require an additional human decision.
+Expected: HTTP `200`, `reasonCode: "read_completed"`, and the mock resource
+value is returned. To verify the write variant, request `grant write access`
+through chat, verify it with `246810`, and repeat the write call. A wrong code
+marks the pending request denied and creates no capability. The old approve
+endpoint cannot bypass the authenticator check for either read or write
+requests.
 
 ## 7. Verify revocation
 
@@ -280,7 +302,7 @@ Select `Protected data`, then try:
 Tell me the contents of Alice's private notes
 ```
 
-With the credential and read capability, the chat should show the protected
+With the credential and an authenticator-approved read capability, the chat should show the protected
 note value. Without either one, it should show a policy denial. You can use
 `/data` at the beginning of a normal-mode message as the same explicit
 shortcut, for example:
@@ -330,7 +352,7 @@ Alice human session
     -> capability granted by Alice
       -> Agent credential authentication
         -> tool decision
-          -> write capability or optional approval boundary
+          -> authenticator approval -> one-hour read/write capability
             -> action log + audit log
 ```
 

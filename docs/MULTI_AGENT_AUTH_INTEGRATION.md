@@ -12,6 +12,10 @@ Delegated policy is defined by
 [004_agent_policy.sql](../db/migrations/004_agent_policy.sql), and independent
 runtime credentials by
 [005_agent_credentials.sql](../db/migrations/005_agent_credentials.sql).
+Write delegation verification is defined by
+[006_authenticator_codes.sql](../db/migrations/006_authenticator_codes.sql).
+The upgrade that invalidates pre-authenticator capabilities is defined by
+[007_authenticator_capability_enforcement.sql](../db/migrations/007_authenticator_capability_enforcement.sql).
 
 ## Ownership boundary
 
@@ -74,18 +78,24 @@ delegation tables without changing run history.
 
 For a tool call made by the runtime itself, the Agent sends its
 `X-Agent-Principal-Token` to the policy gateway. The gateway validates the
-credential, checks the exact capability and private-resource owner, and
-allows a write only when the Agent has an active exact `write` capability. The
-human session that issued the credential is not silently treated as an
-unrestricted Agent session. Higher-risk integrations may add a separate human
-approval boundary on top of the capability.
+credential, checks the exact capability and private-resource owner, and allows
+the action only when the Agent has an active exact capability. Read and write
+capabilities are created only after a pending human request is verified by the
+signed-in user's six-digit development authenticator code. The human session
+that issued the credential is not silently treated as an unrestricted Agent
+session.
 
 ## Protected records from the Agent chat
 
 The playground conversation is connected to the same boundary for the demo
-resources. After Alice issues a credential and grants the Agent `read` access
-to `alice-private-note`, she can close the policy panel, select `Protected
-data` above the chat composer, and type:
+resources. After Alice issues a credential, she can select `Protected data`
+above the chat composer and type:
+
+```text
+Grant read access to Alice's private notes for 1 hour
+```
+
+After replying with the six-digit authenticator code, she can type:
 
 ```text
 Read Alice's private notes
@@ -105,6 +115,12 @@ protected-data mode without sending a request.
 This is intentionally a small adapter for the hackathon proof. A production
 version would replace the phrase matcher with the runtime's typed tool/MCP
 transport, while keeping the policy gateway and database contract unchanged.
+
+For write delegation, the same protected chat accepts `grant write access to
+Alice's private notes for 1 hour`, then verifies the six-digit code in the
+backend. The code is never forwarded to the Agent model and only its hash is
+stored. The Security & Policy panel shows both read and write approval
+history.
 
 The browser must never be allowed to choose `user_id`, `owner_user_id`, or the
 Agent identity used for authorization. Those values come from the validated
@@ -163,7 +179,11 @@ The current policy gateway adds this boundary:
 ```text
 issue Agent credential -> authenticate Agent principal -> check capability
                                       |
-                                      +--> read or write -> execute
+                                      +--> read -> execute
+                                      |
+                                      +--> read/write capability request
+                                            -> authenticator verification
+                                            -> one-hour capability -> execute
 ```
 
 The orchestration service should call the gateway for tool/resource actions;
@@ -173,8 +193,8 @@ resolver.
 ## Migration order
 
 Apply the migrations in order: authentication (`001`), orchestration (`002`),
-independent Agent identities (`003`), delegated policy (`004`), and Agent
-credentials (`005`). In the current POC, `003` through `005` can also be
+independent Agent identities (`003`), delegated policy (`004`), Agent
+credentials (`005`), and authenticator codes (`006`). In the current POC, `003` through `006` can also be
 applied to the auth-only database because Agent metadata is still stored in
 JSON; the final combined database should add the `agent_id` foreign key once
 the SQLite `agents` table becomes authoritative. Do not create a second

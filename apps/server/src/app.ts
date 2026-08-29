@@ -377,6 +377,7 @@ export async function createApp(
             roleNames: request.auth.roleNames,
           }
         : undefined,
+      request.auth ?? undefined,
     );
     return reply.code(202).send(result);
   });

@@ -56,6 +56,14 @@ INSERT OR IGNORE INTO user_roles (user_id, role_id) VALUES
     ('22222222-2222-4222-8222-222222222222',
         '11111111-1111-4111-8111-333333333333');
 
+-- Development-only authenticator codes. The application stores and verifies
+-- only these SHA-256 hashes. Alice's code is 246810; Bob's code is 135790.
+INSERT OR IGNORE INTO user_authenticator_codes (user_id, code_hash) VALUES
+    ('22222222-2222-4222-8222-111111111111',
+        '7c2523c985881fb2c2b4cfbe917eb12c4c4b61e898ad4e7160cfca487ca3c4f3'),
+    ('22222222-2222-4222-8222-222222222222',
+        'dec58ab7d7f9fb6bd366cea633274ef3632f8eaa823bf811c14bed255d60e339');
+
 -- Admin wildcard permissions are explicit per resource family.
 INSERT OR IGNORE INTO permissions
     (id, role_id, resource_type, resource_key, action, allowed)

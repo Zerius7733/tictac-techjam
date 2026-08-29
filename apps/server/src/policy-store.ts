@@ -16,6 +16,10 @@ const defaultSeedPath = path.join(
   repositoryRoot,
   "db/seeds/development_policy.sql",
 );
+const defaultCapabilityEnforcementMigrationPath = path.join(
+  repositoryRoot,
+  "db/migrations/007_authenticator_capability_enforcement.sql",
+);
 
 export type PolicyAction = "read" | "write";
 export type ApprovalStatus =
@@ -170,6 +174,7 @@ export class PolicyStore {
     private readonly databasePath: string,
     private readonly migrationPath = defaultMigrationPath,
     private readonly seedPath = defaultSeedPath,
+    private readonly capabilityEnforcementMigrationPath = defaultCapabilityEnforcementMigrationPath,
   ) {}
 
   async initialize(seedDevelopment: boolean): Promise<void> {
@@ -177,6 +182,7 @@ export class PolicyStore {
     this.database = new DatabaseSync(this.databasePath);
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     this.database.exec(await readFile(this.migrationPath, "utf8"));
+    this.database.exec(await readFile(this.capabilityEnforcementMigrationPath, "utf8"));
     if (seedDevelopment) {
       this.database.exec(await readFile(this.seedPath, "utf8"));
     }
@@ -374,8 +380,10 @@ export class PolicyStore {
     resourceType: string,
     resourceKey: string,
     inputText: string,
+    requestedByUserId?: string,
     now = new Date().toISOString(),
   ): AgentApprovalRequest | null {
+    const requestedByClause = requestedByUserId ? "AND requested_by_user_id = ?" : "";
     const row = this.db()
       .prepare(
         `SELECT id, agent_principal_id, requested_by_user_id, action,
@@ -387,18 +395,24 @@ export class PolicyStore {
            AND resource_type = ?
            AND resource_key = ?
            AND input_text = ?
+           ${requestedByClause}
            AND status = 'pending'
            AND expires_at > ?
          ORDER BY created_at DESC
          LIMIT 1`,
       )
       .get(
-        agentPrincipalId,
-        action,
-        resourceType,
-        resourceKey,
-        inputText,
-        now,
+        ...(requestedByUserId
+          ? [
+              agentPrincipalId,
+              action,
+              resourceType,
+              resourceKey,
+              inputText,
+              requestedByUserId,
+              now,
+            ]
+          : [agentPrincipalId, action, resourceType, resourceKey, inputText, now]),
       ) as ApprovalRow | undefined;
     return row ? toApproval(row) : null;
   }
@@ -408,8 +422,7 @@ export class PolicyStore {
     action: PolicyAction,
     resourceType: string,
     resourceKey: string,
-    inputText: string,
-    now = new Date().toISOString(),
+    inputTextPrefix: string,
   ): AgentApprovalRequest | null {
     const row = this.db()
       .prepare(
@@ -421,9 +434,8 @@ export class PolicyStore {
            AND action = ?
            AND resource_type = ?
            AND resource_key = ?
-           AND input_text = ?
+           AND input_text LIKE ?
            AND status = 'approved'
-           AND expires_at > ?
          ORDER BY decided_at DESC
          LIMIT 1`,
       )
@@ -432,8 +444,7 @@ export class PolicyStore {
         action,
         resourceType,
         resourceKey,
-        inputText,
-        now,
+        inputTextPrefix + "%",
       ) as ApprovalRow | undefined;
     return row ? toApproval(row) : null;
   }

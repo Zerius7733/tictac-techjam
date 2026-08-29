@@ -13,6 +13,8 @@ sqlite3 data/auth.db < db/migrations/001_authentication.sql
 sqlite3 data/auth.db < db/migrations/003_agent_principals.sql
 sqlite3 data/auth.db < db/migrations/004_agent_policy.sql
 sqlite3 data/auth.db < db/migrations/005_agent_credentials.sql
+sqlite3 data/auth.db < db/migrations/006_authenticator_codes.sql
+sqlite3 data/auth.db < db/migrations/007_authenticator_capability_enforcement.sql
 sqlite3 data/auth.db < db/seeds/development_auth.sql
 sqlite3 data/auth.db < db/seeds/development_policy.sql
 ```
@@ -41,10 +43,21 @@ The policy seed also creates three mock resources:
 - `bob-private-note`, owned by Bob; and
 - `shared-status`, a shared record.
 
-Alice can grant her Agent a capability to read or write her own mock record.
-An active exact `write` capability allows the Agent to update that record, and
-both the capability and the Agent credential can be revoked. Approval records
-remain available for future high-risk actions that need an extra human step.
+Alice requests both read and write capabilities through Protected data chat,
+then passes the six-digit development authenticator code. A successful check
+creates the requested exact capability for one hour. The approval is recorded
+in `agent_approval_requests`, while only the authenticator hash is stored in
+`user_authenticator_codes`.
+
+Development authenticator codes:
+
+```text
+alice / 246810
+bob   / 135790
+```
+
+These codes stand in for an authenticator app in this hackathon demo. They are
+not suitable for production; a real deployment should use TOTP or WebAuthn.
 
 ## Combined local database
 
@@ -57,6 +70,8 @@ sqlite3 data/middleware.db < db/migrations/002_multi_agent_orchestration.sql
 sqlite3 data/middleware.db < db/migrations/003_agent_principals.sql
 sqlite3 data/middleware.db < db/migrations/004_agent_policy.sql
 sqlite3 data/middleware.db < db/migrations/005_agent_credentials.sql
+sqlite3 data/middleware.db < db/migrations/006_authenticator_codes.sql
+sqlite3 data/middleware.db < db/migrations/007_authenticator_capability_enforcement.sql
 sqlite3 data/middleware.db < db/seeds/development_auth.sql
 sqlite3 data/middleware.db < db/seeds/development_policy.sql
 ```
@@ -126,12 +141,13 @@ After the server has been restarted and the migrations have run, these routes
 make the security boundary easy to demonstrate:
 
 - `POST /api/agents/:id/credentials` issues a short-lived Agent credential;
-- `POST /api/agents/:id/capabilities` delegates `read` or `write` access to a
-  specific mock resource;
+- `POST /api/agents/:id/capabilities` is retained as a guarded compatibility
+  route; read and write access are authenticator-gated in Protected data chat;
 - `POST /api/agent/tool-calls` authenticates with
   `X-Agent-Principal-Token`, not the human bearer session;
-- `POST /api/agents/:id/approvals/:approvalId/approve` approves a pending
-  high-risk write when an integration uses the optional approval boundary;
+- `POST /api/agents/:id/approvals/:approvalId/approve` remains available for
+  other approval types, but cannot bypass authenticator verification for a
+  capability request;
 - `POST /api/agents/:id/capabilities/:capabilityId/revoke` revokes delegated
   access; and
 - `POST /api/agents/:id/credentials/:credentialId/revoke` revokes the Agent
