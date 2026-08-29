@@ -12,7 +12,10 @@ import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 
 class FakeRunner implements AgentRunner {
+  lastRequest: RunnerRequest | null = null;
+
   async run(request: RunnerRequest): Promise<RunnerResult> {
+    this.lastRequest = request;
     return {
       output: "Completed: " + request.prompt,
       threadId: request.threadId ?? "fake-thread",
@@ -142,6 +145,62 @@ describe("Agent lifecycle", () => {
     expect(service.getAgent(agent.id).codexThreadId).toBe("fake-thread");
   });
 
+  it("does not infer protected data access from an ordinary Agent prompt", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "Normal Chat Agent" });
+    const { run } = await service.sendMessage(
+      agent.id,
+      "tell me the contents of Alice's private notes",
+    );
+
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    expect(service.getRun(run.id).output).toBe(
+      "Completed: tell me the contents of Alice's private notes",
+    );
+
+  });
+
+  it("passes the authenticated human identity to ordinary Agent runs", async () => {
+    const runner = new FakeRunner();
+    const service = await makeService(runner);
+    const agent = await service.createAgent({ name: "Identity Aware Agent" });
+    const { run } = await service.sendMessage(
+      agent.id,
+      "Who am I?",
+      undefined,
+      false,
+      undefined,
+      "agent",
+      { username: "alice", displayName: "Alice", roleNames: ["developer"] },
+    );
+
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    expect(runner.lastRequest?.humanIdentity).toEqual({
+      username: "alice",
+      displayName: "Alice",
+      roleNames: ["developer"],
+    });
+  });
+
+  it("returns protected request guidance inside the conversation", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "Protected Mode Agent" });
+    const { run } = await service.sendMessage(
+      agent.id,
+      "what is in the private database",
+      undefined,
+      false,
+      undefined,
+      "protected-data",
+    );
+
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    expect(service.getRun(run.id).output).toContain(
+      "I couldn’t understand that protected-data request.",
+    );
+    expect(service.getMessages(agent.id).at(-1)?.role).toBe("assistant");
+  });
+
   it("routes protected chat requests through the Agent policy gateway", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "launchpad-chat-policy-test-"));
     temporaryDirectories.push(root);
@@ -180,6 +239,7 @@ describe("Agent lifecycle", () => {
       context.userId,
       false,
       identity,
+      "protected-data",
     );
     await expect.poll(() => service.getRun(denied.run.id).status).toBe("completed");
     expect(service.getRun(denied.run.id).output).toContain("capability_not_granted");
@@ -196,10 +256,55 @@ describe("Agent lifecycle", () => {
       context.userId,
       false,
       identity,
+      "protected-data",
     );
     await expect.poll(() => service.getRun(allowed.run.id).status).toBe("completed");
     expect(service.getRun(allowed.run.id).output).toContain("Alice private note");
     expect(service.getRun(allowed.run.id).output).toContain("read_completed");
+
+    gateway.grantCapability(context, agent, {
+      resourceType: "mock_record",
+      resourceKey: "alice-private-note",
+      action: "write",
+      expiresInSeconds: 3_600,
+    });
+    const updated = await service.sendMessage(
+      agent.id,
+      "write into Alice's private notes, changing it to Sahara means desert",
+      context.userId,
+      false,
+      identity,
+      "protected-data",
+    );
+    await expect.poll(() => service.getRun(updated.run.id).status).toBe("completed");
+    expect(service.getRun(updated.run.id).output).toContain(
+      "I updated alice-private-note through the protected resource gateway.",
+    );
+    expect(service.getRun(updated.run.id).output).toContain("write_completed");
+    expect(policyStore.getMockResource("mock_record", "alice-private-note")?.value).toBe(
+      "Sahara means desert",
+    );
+
+    const readAfterWrite = await service.sendMessage(
+      agent.id,
+      "read Alice's private notes",
+      context.userId,
+      false,
+      identity,
+      "protected-data",
+    );
+    await expect.poll(() => service.getRun(readAfterWrite.run.id).status).toBe("completed");
+    expect(service.getRun(readAfterWrite.run.id).output).toContain("Sahara means desert");
+
+    const shortcut = await service.sendMessage(
+      agent.id,
+      "/data tell me the contents of Alice's private notes",
+      context.userId,
+      false,
+      identity,
+    );
+    await expect.poll(() => service.getRun(shortcut.run.id).status).toBe("completed");
+    expect(service.getRun(shortcut.run.id).output).toContain("Sahara means desert");
 
     policyStore.close();
     authStore.close();

@@ -35,6 +35,7 @@ const updateAgentBody = createAgentBody.partial().refine(
 );
 const messageBody = z.object({
   content: z.string().trim().min(1).max(50_000),
+  mode: z.enum(["agent", "protected-data"]).default("agent"),
 });
 const loginBody = z.object({
   username: z.string().trim().min(1).max(120),
@@ -368,6 +369,14 @@ export async function createApp(
       access.ownerUserId,
       access.includeAll,
       request.agentAuth ?? undefined,
+      body.mode,
+      request.auth
+        ? {
+            username: request.auth.username,
+            displayName: request.auth.displayName,
+            roleNames: request.auth.roleNames,
+          }
+        : undefined,
     );
     return reply.code(202).send(result);
   });

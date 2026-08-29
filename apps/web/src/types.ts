@@ -1,6 +1,7 @@
 export type AgentStatus = "ready" | "busy" | "stopped" | "error";
 export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
 export type PolicyAction = "read" | "write";
+export type ChatMode = "agent" | "protected-data";
 
 export interface Agent {
   id: string;

@@ -128,11 +128,13 @@ describe("Agent policy HTTP boundary", () => {
           authorization: `Bearer ${sessionToken}`,
           "x-agent-principal-token": credential.token,
         },
-        payload: { content: "read Alice's private notes" },
+        payload: { content: "read Alice's private notes", mode: "protected-data" },
       });
       expect(conversation.statusCode).toBe(202);
       expect(conversationArgs?.[0]).toBe(agent.id);
       expect(conversationArgs?.[1]).toBe("read Alice's private notes");
+      expect(conversationArgs?.[5]).toBe("protected-data");
+      expect(conversationArgs?.[6]).toMatchObject({ username: "alice" });
       expect(conversationArgs?.[4]).toMatchObject({
         agentId: agent.id,
         principalId: principal.id,

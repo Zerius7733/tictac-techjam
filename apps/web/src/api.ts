@@ -6,6 +6,7 @@ import type {
   AgentCredential,
   AgentPolicyResult,
   AgentRun,
+  ChatMode,
   Message,
   MockResource,
   PolicyAction,
@@ -48,9 +49,20 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
     ...options,
     headers,
   });
-  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+  const data = (await response.json().catch(() => ({}))) as T & {
+    error?: string;
+    message?: string;
+    details?: Array<{ message?: string }>;
+  };
   if (!response.ok) {
-    throw new ApiError(data.error ?? "Request failed", response.status, data);
+    const detail = data.details?.map((item) => item.message).filter(Boolean).join("; ");
+    throw new ApiError(
+      data.error && data.error !== "Bad Request"
+        ? data.error
+        : detail || data.message || data.error || "Request failed",
+      response.status,
+      data,
+    );
   }
   return data;
 }
@@ -145,12 +157,12 @@ export const api = {
     request<{ messages: Message[] }>("/api/agents/" + id + "/messages"),
   runs: (id: string) =>
     request<{ runs: AgentRun[] }>("/api/agents/" + id + "/runs"),
-  sendMessage: (id: string, content: string, agentToken = "") =>
+  sendMessage: (id: string, content: string, agentToken = "", mode: ChatMode = "agent") =>
     request<{ run: AgentRun; message: Message }>(
       "/api/agents/" + id + "/messages",
       {
         method: "POST",
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, mode }),
         ...(agentToken
           ? { headers: { "X-Agent-Principal-Token": agentToken } }
           : {}),

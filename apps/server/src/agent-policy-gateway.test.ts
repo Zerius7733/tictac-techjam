@@ -124,7 +124,7 @@ describe("AgentPolicyGateway", () => {
     });
   });
 
-  it("requires approval for writes and honors capability revocation", async () => {
+  it("allows writes with an active write capability and honors revocation", async () => {
     const system = await makePolicySystem();
     const capability = system.gateway.grantCapability(
       system.context,
@@ -136,27 +136,6 @@ describe("AgentPolicyGateway", () => {
         expiresInSeconds: 3_600,
       },
     );
-
-    const pending = system.gateway.execute(system.context, system.agent, {
-      action: "write",
-      resourceType: "mock_record",
-      resourceKey: "alice-private-note",
-      inputText: "Approved replacement note",
-    });
-    expect(pending).toMatchObject({
-      status: "approval_required",
-      allowed: false,
-      approval: { status: "pending" },
-    });
-    if (pending.status !== "approval_required" || !pending.approval) return;
-
-    const approval = system.gateway.decideApproval(
-      system.context,
-      system.agent,
-      pending.approval.id,
-      "approved",
-    );
-    expect(approval.status).toBe("approved");
 
     const completed = system.gateway.execute(system.context, system.agent, {
       action: "write",
@@ -184,7 +163,6 @@ describe("AgentPolicyGateway", () => {
     });
 
     const logs = system.gateway.listActionLogs(system.agent);
-    expect(logs.some((log) => log.resultCode === "approval_required")).toBe(true);
     expect(logs.some((log) => log.resultCode === "write_completed")).toBe(true);
     expect(logs.every((log) => log.metadata.targetValueLogged === false)).toBe(true);
   });

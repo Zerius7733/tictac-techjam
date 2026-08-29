@@ -42,8 +42,9 @@ The policy seed also creates three mock resources:
 - `shared-status`, a shared record.
 
 Alice can grant her Agent a capability to read or write her own mock record.
-Writes require a separate approval, and both the capability and the Agent
-credential can be revoked.
+An active exact `write` capability allows the Agent to update that record, and
+both the capability and the Agent credential can be revoked. Approval records
+remain available for future high-risk actions that need an extra human step.
 
 ## Combined local database
 
@@ -129,7 +130,8 @@ make the security boundary easy to demonstrate:
   specific mock resource;
 - `POST /api/agent/tool-calls` authenticates with
   `X-Agent-Principal-Token`, not the human bearer session;
-- `POST /api/agents/:id/approvals/:approvalId/approve` approves a pending write;
+- `POST /api/agents/:id/approvals/:approvalId/approve` approves a pending
+  high-risk write when an integration uses the optional approval boundary;
 - `POST /api/agents/:id/capabilities/:capabilityId/revoke` revokes delegated
   access; and
 - `POST /api/agents/:id/credentials/:credentialId/revoke` revokes the Agent

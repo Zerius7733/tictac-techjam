@@ -279,54 +279,11 @@ export class AgentPolicyGateway {
           capability.id,
         );
       }
-      const approved = this.policyStore.findApprovedApproval(
-        principal.id,
-        input.action,
-        input.resourceType,
-        input.resourceKey,
-        inputText,
-      );
-      if (!approved) {
-        const pending =
-          this.policyStore.findPendingApproval(
-            principal.id,
-            input.action,
-            input.resourceType,
-            input.resourceKey,
-            inputText,
-          ) ??
-          this.policyStore.createApproval({
-            agentPrincipalId: principal.id,
-            requestedByUserId: ownerUserId,
-            action: input.action,
-            resourceType: input.resourceType,
-            resourceKey: input.resourceKey,
-            inputText,
-            expiresAt: new Date(Date.now() + 10 * 60 * 1000).toISOString(),
-          });
-        const actionLogId = this.recordAction(
-          principal,
-          auditLogIdFor("deny", "approval_required"),
-          input,
-          "deny",
-          "approval_required",
-          capability.id,
-          pending.id,
-        );
-        return {
-          status: "approval_required",
-          allowed: false,
-          reasonCode: "approval_required",
-          actionLogId,
-          approval: pending,
-        };
-      }
       this.policyStore.updateMockResource(
         input.resourceType,
         input.resourceKey,
         inputText,
       );
-      this.policyStore.consumeApproval(approved.id, principal.id);
       const actionLogId = this.recordAction(
         principal,
         auditLogIdFor("allow", "write_completed"),
@@ -334,7 +291,6 @@ export class AgentPolicyGateway {
         "allow",
         "write_completed",
         capability.id,
-        approved.id,
       );
       return {
         status: "allowed",

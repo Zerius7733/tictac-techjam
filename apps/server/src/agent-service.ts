@@ -10,11 +10,16 @@ import type {
   AgentRun,
   AgentRunner,
   CreateAgentInput,
+  HumanIdentity,
   Message,
   UpdateAgentInput,
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
-import { parseProtectedResourceIntent } from "./protected-resource-intent.js";
+import {
+  type ChatMode,
+  type ProtectedResourceIntent,
+  parseProtectedResourceIntent,
+} from "./protected-resource-intent.js";
 
 const now = () => new Date().toISOString();
 
@@ -197,10 +202,23 @@ export class AgentService {
     ownerUserId?: string,
     includeAll = false,
     agentIdentity?: AgentRuntimeIdentity,
+    mode: ChatMode = "agent",
+    humanIdentity?: HumanIdentity,
   ): Promise<{ run: AgentRun; message: Message }> {
     this.getAgent(agentId, ownerUserId, includeAll);
-    const protectedIntent = parseProtectedResourceIntent(prompt);
-    if (!protectedIntent && !isArkConfigured(this.config)) {
+    const commandRequested = /^\s*\/data\b/i.test(prompt);
+    const policyPrompt = commandRequested
+      ? prompt.replace(/^\s*\/data\s*/i, "").trim()
+      : prompt;
+    const protectedMode = mode === "protected-data" || commandRequested;
+    const protectedIntent = protectedMode
+      ? parseProtectedResourceIntent(policyPrompt)
+      : null;
+    const protectedRequestError =
+      protectedMode && !protectedIntent
+        ? "I couldn’t understand that protected-data request. Try ‘read Alice’s private notes’, ‘read Bob’s private notes’, or ‘read shared-status’. For a write, include the new value, for example ‘write Alice’s private note: …’."
+        : null;
+    if (!protectedIntent && !protectedRequestError && !isArkConfigured(this.config)) {
       throw new HttpError(
         503,
         "Ark is not configured. Set ARK_API_KEY and ARK_MODEL, then restart.",
@@ -247,7 +265,14 @@ export class AgentService {
       storedAgent.updatedAt = timestamp;
       return snapshot;
     });
-    const execution = this.executeRun(agentAtStart, run, agentIdentity, protectedIntent);
+    const execution = this.executeRun(
+      agentAtStart,
+      run,
+      agentIdentity,
+      protectedIntent,
+      protectedRequestError,
+      humanIdentity,
+    );
     this.activeExecutions.set(agentId, execution);
     void execution
       .finally(() => {
@@ -282,7 +307,9 @@ export class AgentService {
     agentAtStart: Agent,
     run: AgentRun,
     agentIdentity?: AgentRuntimeIdentity,
-    protectedIntent = parseProtectedResourceIntent(run.prompt),
+    protectedIntent: ProtectedResourceIntent | null = null,
+    protectedRequestError: string | null = null,
+    humanIdentity?: HumanIdentity,
   ): Promise<void> {
     await this.store.mutate((database) => {
       const storedRun = database.runs.find((item) => item.id === run.id);
@@ -295,14 +322,21 @@ export class AgentService {
       if (this.cancellationRequests.has(agentAtStart.id)) {
         throw new RunCancelledError();
       }
-      const result = protectedIntent
-        ? this.runProtectedResourceRequest(agentAtStart, protectedIntent, agentIdentity)
-        : await this.runner.run({
-            agentId: agentAtStart.id,
-            workspacePath: agentAtStart.workspacePath,
-            prompt: run.prompt,
+      const result = protectedRequestError
+        ? {
+            output: protectedRequestError,
             threadId: agentAtStart.codexThreadId,
-          });
+            usage: null,
+          }
+        : protectedIntent
+          ? this.runProtectedResourceRequest(agentAtStart, protectedIntent, agentIdentity)
+          : await this.runner.run({
+              agentId: agentAtStart.id,
+              workspacePath: agentAtStart.workspacePath,
+              prompt: run.prompt,
+              threadId: agentAtStart.codexThreadId,
+              ...(humanIdentity ? { humanIdentity } : {}),
+            });
       const completedAt = now();
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
@@ -350,7 +384,7 @@ export class AgentService {
 
   private runProtectedResourceRequest(
     agent: Agent,
-    intent: NonNullable<ReturnType<typeof parseProtectedResourceIntent>>,
+    intent: ProtectedResourceIntent,
     identity?: AgentRuntimeIdentity,
   ) {
     if (!identity) {
@@ -367,12 +401,13 @@ export class AgentService {
 
     const decision = this.policyGateway.executeAsAgent(identity, agent, intent);
     if (decision.status === "allowed") {
+      const isRead = intent.action === "read";
       return {
         output: [
-          `I accessed ${decision.resource.resourceKey} through the protected resource gateway.`,
-          "",
-          decision.resource.value ?? "",
-          "",
+          isRead
+            ? `I accessed ${decision.resource.resourceKey} through the protected resource gateway.`
+            : `I updated ${decision.resource.resourceKey} through the protected resource gateway.`,
+          ...(isRead ? ["", decision.resource.value ?? "", ""] : [""]),
           `Policy decision: ${decision.reasonCode}`,
         ].join("\n"),
         threadId: agent.codexThreadId,
@@ -380,14 +415,19 @@ export class AgentService {
       };
     }
 
+    const verb = intent.action === "read" ? "access" : "update";
+    const requirement =
+      decision.reasonCode === "write_input_required"
+        ? "Include the new note text in the write request."
+        : decision.status === "approval_required"
+          ? "Open Security & Policy to review the pending human approval."
+          : "The Agent needs an active capability for this exact resource and action.";
     return {
       output: [
-        `I couldn’t access ${intent.resourceKey}. The backend policy gateway denied the Agent request.`,
+        `I couldn’t ${verb} ${intent.resourceKey}. The backend policy gateway denied the Agent request.`,
         "",
         `Policy decision: ${decision.reasonCode}`,
-        decision.status === "approval_required"
-          ? "Open Security & Policy to review the pending human approval."
-          : "The Agent needs an active capability for this exact resource and action.",
+        requirement,
       ].join("\n"),
       threadId: agent.codexThreadId,
       usage: null,

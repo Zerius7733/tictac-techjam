@@ -6,7 +6,8 @@ proves four separate boundaries:
 1. a human must log in before using the API;
 2. Agents belong to the human who created them;
 3. an Agent must use its own credential and an explicitly delegated capability;
-4. writes require human approval and every decision is attributable.
+4. an Agent with an active write capability can update the exact delegated
+   resource, and every decision is attributable.
 
 The data is intentionally mock data. Do not use these demo credentials or
 mock-resource values for anything sensitive.
@@ -23,18 +24,25 @@ database:
    only in the current browser tab.
 4. Under `Delegated capability`, choose `alice-private-note`, choose `Read`,
    and click `Grant read capability`.
-5. Close the panel and type `Read Alice's private notes` in the Agent chat.
-   The assistant response should include the Alice note and
-   `Policy decision: read_completed`. This is the conversation path using the
-   same Agent credential and delegated capability.
+5. Close the panel, select `Protected data` above the chat composer, and type
+   `Read Alice's private notes`. The assistant response should include the
+   Alice note and `Policy decision: read_completed`. This is the conversation
+   path using the same Agent credential and delegated capability.
 6. Reopen `Security & Policy`, revoke the active `alice-private-note` read
    capability, close the panel, and send the same chat request again. The
    assistant should show `capability_not_granted` and no note value.
+7. Grant a `Write` capability for `alice-private-note`, close the panel, keep
+   `Protected data` selected, and type `Write into Alice's private notes,
+   changing it to Sahara means desert`. The assistant should confirm the
+   update with `Policy decision: write_completed`.
+8. Ask `Read Alice's private notes` and confirm the new value is returned.
+   Revoke the write capability and repeat the write; it should now show
+   `capability_not_granted`.
 
 The panel is intentionally focused on identity, credentials, and delegated
 capabilities. The duplicate direct policy-test card was removed; the
 conversation itself is now the user-facing policy test. The backend still
-enforces write approvals through the policy gateway and automated/API checks.
+enforces write capabilities through the policy gateway and automated/API checks.
 
 While performing these steps, refresh `data/auth.db` in the SQLite viewer to
 observe `agent_capabilities`, `agent_approval_requests`, and
@@ -204,7 +212,7 @@ curl -i -X POST http://localhost:3000/api/agents/<AGENT_ID>/capabilities \
 Expected: HTTP `403`. This is the important server-side ownership check; it is
 not just a hidden UI item.
 
-## 6. Verify approval for writes
+## 6. Verify writes with a delegated capability
 
 Grant a write capability on Alice's note:
 
@@ -215,7 +223,7 @@ curl -s -X POST http://localhost:3000/api/agents/<AGENT_ID>/capabilities \
   -d '{"resourceType":"mock_record","resourceKey":"alice-private-note","action":"write","expiresInSeconds":3600}'
 ```
 
-Ask the Agent to write:
+Ask the Agent to write with the same Agent credential:
 
 ```sh
 curl -i -X POST http://localhost:3000/api/agent/tool-calls \
@@ -224,18 +232,10 @@ curl -i -X POST http://localhost:3000/api/agent/tool-calls \
   -d '{"action":"write","resourceType":"mock_record","resourceKey":"alice-private-note","inputText":"Approved replacement note"}'
 ```
 
-Expected: HTTP `403`, `status: "approval_required"`, and an approval `id`.
-
-Alice approves that exact proposed write:
-
-```sh
-curl -s -X POST http://localhost:3000/api/agents/<AGENT_ID>/approvals/<APPROVAL_ID>/approve \
-  -H 'Authorization: Bearer <ALICE_SESSION>'
-```
-
-Retry the identical Agent call. Expected: HTTP `200`,
-`reasonCode: "write_completed"`. A second retry should not reuse the consumed
-approval; it should require a new approval.
+Expected: HTTP `200`, `reasonCode: "write_completed"`, and the mock resource
+value is updated. The active write capability is the authorization for this
+small demo. Approval tables and endpoints remain available for future
+high-risk actions that should require an additional human decision.
 
 ## 7. Verify revocation
 
@@ -265,7 +265,37 @@ curl -s -X POST http://localhost:3000/api/agents/<AGENT_ID>/credentials/<CREDENT
 
 Any subsequent call with `<AGENT_TOKEN>` must return HTTP `401`.
 
-## 8. Inspect attribution in SQLite
+## 8. Verify protected access from the chat UI
+
+The playground has two explicit chat modes:
+
+- `Agent tasks` sends the prompt to the normal Agent runner. Mentioning a
+  protected note in this mode does not automatically read the database.
+- `Protected data` sends the request through the backend policy gateway. The
+  Agent credential and an active exact capability are still required.
+
+Select `Protected data`, then try:
+
+```text
+Tell me the contents of Alice's private notes
+```
+
+With the credential and read capability, the chat should show the protected
+note value. Without either one, it should show a policy denial. You can use
+`/data` at the beginning of a normal-mode message as the same explicit
+shortcut, for example:
+
+```text
+/data read Alice's private notes
+```
+
+Typing `/data` by itself switches the composer to `Protected data` mode; it
+does not send an incomplete request.
+
+The shortcut changes routing only; it cannot bypass the credential or
+capability checks.
+
+## 9. Inspect attribution in SQLite
 
 In the SQLite viewer, inspect these tables:
 
@@ -300,7 +330,7 @@ Alice human session
     -> capability granted by Alice
       -> Agent credential authentication
         -> tool decision
-          -> optional approval by Alice
+          -> write capability or optional approval boundary
             -> action log + audit log
 ```
 
@@ -310,8 +340,8 @@ the action metadata.
 ## Backend test command
 
 The automated checks cover login/session behavior, ownership isolation,
-capability enforcement, write approvals, credential separation, and credential
-revocation:
+capability enforcement, delegated writes, credential separation, and
+credential revocation:
 
 ```sh
 npm run check

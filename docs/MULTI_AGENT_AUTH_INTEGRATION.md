@@ -75,14 +75,17 @@ delegation tables without changing run history.
 For a tool call made by the runtime itself, the Agent sends its
 `X-Agent-Principal-Token` to the policy gateway. The gateway validates the
 credential, checks the exact capability and private-resource owner, and
-requires a human approval for a write. The human session that issued the
-credential is not silently treated as an unrestricted Agent session.
+allows a write only when the Agent has an active exact `write` capability. The
+human session that issued the credential is not silently treated as an
+unrestricted Agent session. Higher-risk integrations may add a separate human
+approval boundary on top of the capability.
 
 ## Protected records from the Agent chat
 
 The playground conversation is connected to the same boundary for the demo
 resources. After Alice issues a credential and grants the Agent `read` access
-to `alice-private-note`, she can close the policy panel and type:
+to `alice-private-note`, she can close the policy panel, select `Protected
+data` above the chat composer, and type:
 
 ```text
 Read Alice's private notes
@@ -94,7 +97,10 @@ The server recognizes this explicit demo-resource request, authenticates the
 result and the value only when the Agent is active and the exact capability is
 valid. Without a credential, without a capability, after expiry, or after
 revocation, the chat shows a denial instead. Ordinary coding prompts continue
-through the normal Codex runner.
+through the normal Codex runner. The chat also accepts `/data` at the start of
+a message as a shortcut. The mode/command is only a routing signal; it never
+grants access by itself. Typing `/data` by itself switches the UI into
+protected-data mode without sending a request.
 
 This is intentionally a small adapter for the hackathon proof. A production
 version would replace the phrase matcher with the runtime's typed tool/MCP
@@ -157,7 +163,7 @@ The current policy gateway adds this boundary:
 ```text
 issue Agent credential -> authenticate Agent principal -> check capability
                                       |
-                                      +--> write -> human approval -> execute
+                                      +--> read or write -> execute
 ```
 
 The orchestration service should call the gateway for tool/resource actions;

@@ -13,6 +13,7 @@ import type {
   AgentCapability,
   AgentCredential,
   AgentRun,
+  ChatMode,
   Message,
   MockResource,
   PolicyAction,
@@ -256,7 +257,7 @@ function SecurityPanel({
         </div>
 
         <div className="security-grid">
-          <section className="security-card">
+          <section className="security-card security-access-card">
             <div className="security-card-heading">
               <div>
                 <span className="eyebrow">1 · Agent credential</span>
@@ -304,7 +305,7 @@ function SecurityPanel({
             )}
           </section>
 
-          <section className="security-card">
+          <section className="security-card security-access-card">
             <div className="security-card-heading">
               <div>
                 <span className="eyebrow">2 · Delegated capability</span>
@@ -313,7 +314,7 @@ function SecurityPanel({
               <span className="security-count">{activeCapabilities.length} active</span>
             </div>
             <p className="security-copy">
-              A capability is exact: one Agent, one resource, and one action. Write actions always require approval.
+              A capability is exact: one Agent, one resource, and one action. A write capability lets the Agent update that resource.
             </p>
             <label>
               Protected resource
@@ -333,7 +334,7 @@ function SecurityPanel({
                   className={"choice-button " + (action === option ? "selected" : "")}
                   onClick={() => setAction(option)}
                 >
-                  {option === "read" ? "Read" : "Write · approval required"}
+                  {option === "read" ? "Read" : "Write"}
                 </button>
               ))}
             </div>
@@ -451,6 +452,7 @@ export default function App() {
   const [securitySetup, setSecuritySetup] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [prompt, setPrompt] = useState("");
+  const [chatMode, setChatMode] = useState<ChatMode>("agent");
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -533,6 +535,7 @@ export default function App() {
   useEffect(() => {
     setActiveRun(null);
     setShowSettings(false);
+    setChatMode("agent");
     if (!selectedId) {
       setMessages([]);
       return;
@@ -662,6 +665,12 @@ export default function App() {
     event.preventDefault();
     if (!selected || !prompt.trim()) return;
     const content = prompt.trim();
+    if (/^\/data\s*$/i.test(content)) {
+      setChatMode("protected-data");
+      setPrompt("");
+      setError(null);
+      return;
+    }
     setPrompt("");
     setError(null);
     try {
@@ -669,6 +678,7 @@ export default function App() {
         selected.id,
         content,
         agentCredentials[selected.id]?.token ?? "",
+        chatMode,
       );
       if (selectedIdRef.current === selected.id) {
         setMessages((current) => [...current, result.message]);
@@ -1095,6 +1105,32 @@ export default function App() {
               </div>
 
               <form className="composer" onSubmit={sendMessage}>
+                <div className="composer-modebar" role="group" aria-label="Chat mode">
+                  <span className="composer-mode-label">Use chat for</span>
+                  <div className="composer-mode-options">
+                    <button
+                      type="button"
+                      className={"composer-mode-button " + (chatMode === "agent" ? "active" : "")}
+                      aria-pressed={chatMode === "agent"}
+                      onClick={() => setChatMode("agent")}
+                    >
+                      Agent tasks
+                    </button>
+                    <button
+                      type="button"
+                      className={"composer-mode-button " + (chatMode === "protected-data" ? "active" : "")}
+                      aria-pressed={chatMode === "protected-data"}
+                      onClick={() => setChatMode("protected-data")}
+                    >
+                      Protected data
+                    </button>
+                  </div>
+                  <span className="composer-mode-help">
+                    {chatMode === "protected-data"
+                      ? "Credential + exact capability required"
+                      : "Use /data as a shortcut · type it alone to switch"}
+                  </span>
+                </div>
                 <textarea
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
@@ -1107,7 +1143,9 @@ export default function App() {
                   placeholder={
                     selected.status === "stopped"
                       ? "Start this Agent to continue…"
-                      : "Describe what you want the Agent to do…"
+                      : chatMode === "protected-data"
+                        ? "Ask about a protected record, e.g. read Alice’s private notes…"
+                        : "Describe what you want the Agent to do…"
                   }
                   disabled={
                     selected.status === "stopped" ||
@@ -1119,9 +1157,11 @@ export default function App() {
                 <div className="composer-footer">
                   <span>
                     Enter to send · Shift + Enter for newline · {system?.codexSandboxMode ?? "checking sandbox"}
-                    {agentCredentials[selected.id]
-                      ? " · Agent policy credential active"
-                      : " · Add a credential to read protected records"}
+                    {chatMode === "protected-data"
+                      ? agentCredentials[selected.id]
+                        ? " · Protected data mode · credential active"
+                        : " · Protected data mode · issue an Agent credential"
+                      : " · Normal Agent mode"}
                   </span>
                   <button
                     className="send-button"

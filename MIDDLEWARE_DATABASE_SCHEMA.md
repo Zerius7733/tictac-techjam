@@ -28,7 +28,7 @@ The database must support:
 8. storing prompts, progress events, results, and errors in order; and
 9. giving each Agent an independent, revocable runtime identity;
 10. delegating narrow capabilities to Agent identities;
-11. requiring human approval for selected writes; and
+11. supporting optional human approval for selected high-risk writes; and
 12. surviving a server restart without losing the execution history.
 
 It does **not** attempt to be a production identity provider, workflow engine,
@@ -992,7 +992,8 @@ type AgentRuntimeIdentity = {
 
 The Agent credential identifies the Agent principal only. It does not grant
 access by itself; the policy gateway still checks ownership, capability,
-expiration, revocation, and approval state.
+expiration, and revocation. High-risk integrations may also require an
+additional approval state.
 
 ### Authorization contract
 
@@ -1022,8 +1023,9 @@ Rules:
   must not inherit unrestricted access from the human session that issued it.
 - A capability must match the exact Agent principal, resource, and action and
   must be active and unexpired.
-- A write capability is not sufficient by itself: the exact write request must
-  be approved before it is executed.
+- A standard mock-resource write is allowed when the exact active write
+  capability matches. High-risk integrations may require an additional
+  approval before execution.
 
 ### Suggested API surface
 
@@ -1038,7 +1040,7 @@ one.
 | `GET /api/agents` | `agent:view` | Read active/known agents |
 | `POST /api/agents` | `agent:create` | Insert an agent owned by the current user or shared |
 | `PATCH /api/agents/:id` | `agent:update` | Update metadata; update `updated_at` |
-| `POST /api/agents/:id/messages` | `agent:invoke` | Create a job, root run, and prompt message |
+| `POST /api/agents/:id/messages` | `agent:invoke` | Create a job, root run, and prompt message; accept `mode = agent` or `protected-data` |
 | `GET /api/agents/:id/messages` | `agent:view` | Read ordered messages for the agent's jobs |
 | `GET /api/agents/:id/runs` | `run:view` | Read runs for the agent |
 | `GET /api/runs/:id` | `run:view` | Read one run |
@@ -1065,6 +1067,10 @@ one.
   correlated.
 - Never return `password_hash`, `token_hash`, or a raw session token after the
   login response. Return a raw Agent credential only in the issuance response.
+- Treat `mode = protected-data` (or a leading `/data` command) as an
+  explicit routing request to the protected policy gateway, never as a grant
+  of access. The gateway still requires the Agent credential and exact active
+  capability.
 
 ### Mapping the current single-agent endpoints
 
@@ -1118,9 +1124,10 @@ Agent tool-call flow:
 4. Auth hashes the credential and loads the active Agent principal
 5. Policy gateway checks the exact resource/action capability
 6. Private-resource ownership is checked against the Agent owner
-7. A write creates or consumes a one-time human approval
+7. A standard write executes when its exact write capability is active; a
+   high-risk write may additionally create or consume a human approval
 8. Agent action and base audit records capture the principal, capability,
-   approval, resource, decision, and result code
+   optional approval, resource, decision, and result code
 9. Revoking the credential or capability changes the next request immediately
 ```
 
@@ -1304,7 +1311,7 @@ next version.
 - [ ] Denied decisions are written to `audit_logs`.
 - [ ] Each Agent has an independent principal and short-lived credential.
 - [ ] Agent tool calls require an exact, active capability.
-- [ ] Selected writes require one-time human approval.
+- [ ] Optional approval boundaries are available for selected high-risk writes.
 - [ ] Agent actions link principal, capability, approval, and audit IDs.
 - [ ] Credential and capability revocation affect the next request.
 - [ ] Job/root-run/prompt creation is one transaction.
