@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { AgentStore } from "./agent-store.js";
 import type { AuthStore } from "./auth-store.js";
 import type { AppConfig } from "./config.js";
 import { isArkConfigured } from "./config.js";
 import { HttpError, RunCancelledError } from "./errors.js";
-import { JsonStore } from "./store.js";
 import type {
   Agent,
   AgentRun,
@@ -22,7 +22,7 @@ export class AgentService {
 
   constructor(
     private readonly config: AppConfig,
-    private readonly store: JsonStore,
+    private readonly store: AgentStore,
     private readonly workspaces: WorkspaceManager,
     private readonly runner: AgentRunner,
     private readonly authStore?: AuthStore,
@@ -34,7 +34,11 @@ export class AgentService {
     await this.ensureAgentPrincipals();
     await this.store.mutate((database) => {
       for (const run of database.runs) {
-        if (run.status === "queued" || run.status === "running") {
+        if (
+          run.status === "queued" ||
+          run.status === "running" ||
+          run.status === "waiting"
+        ) {
           run.status = "cancelled";
           run.error = "Server restarted while this run was active";
           run.completedAt = now();
@@ -53,7 +57,9 @@ export class AgentService {
     const agents = this.store.snapshot().agents;
     return agents
       .filter(
-        (agent) => this.canAccess(agent, ownerUserId, includeAll),
+        (agent) =>
+          (includeAll || agent.status !== "archived") &&
+          this.canAccess(agent, ownerUserId, includeAll),
       )
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
@@ -105,6 +111,9 @@ export class AgentService {
     includeAll = false,
   ): Promise<Agent> {
     const current = this.getAgent(id, ownerUserId, includeAll);
+    if (current.status === "archived") {
+      throw new HttpError(409, "Archived Agents cannot be edited");
+    }
     if (current.status === "busy") {
       throw new HttpError(409, "Stop the active run before editing this Agent");
     }
@@ -143,16 +152,19 @@ export class AgentService {
       if (!storedAgent || !this.canAccess(storedAgent, ownerUserId, includeAll)) {
         throw new HttpError(404, "Agent not found");
       }
-      database.agents = database.agents.filter((item) => item.id !== id);
-      database.messages = database.messages.filter((item) => item.agentId !== id);
-      database.runs = database.runs.filter((item) => item.agentId !== id);
+      storedAgent.status = "archived";
+      storedAgent.lastError = null;
+      storedAgent.updatedAt = now();
     });
     this.authStore?.revokeAgentPrincipal(id);
     return { archivedWorkspace };
   }
 
   async startAgent(id: string, ownerUserId?: string, includeAll = false): Promise<Agent> {
-    this.getAgent(id, ownerUserId, includeAll);
+    const agent = this.getAgent(id, ownerUserId, includeAll);
+    if (agent.status === "archived") {
+      throw new HttpError(409, "Archived Agents cannot be started");
+    }
     return this.setStatus(id, "ready", ownerUserId, includeAll);
   }
 
@@ -206,6 +218,7 @@ export class AgentService {
     const run: AgentRun = {
       id: runId,
       agentId,
+      codexThreadId: null,
       status: "queued",
       prompt,
       output: null,
@@ -230,6 +243,9 @@ export class AgentService {
       }
       if (storedAgent.status === "stopped") {
         throw new HttpError(409, "Start the Agent before sending a message");
+      }
+      if (storedAgent.status === "archived") {
+        throw new HttpError(409, "Archived Agents cannot receive messages");
       }
       if (storedAgent.status === "busy") {
         throw new HttpError(409, "This Agent is already running");
@@ -289,7 +305,10 @@ export class AgentService {
         agentId: agentAtStart.id,
         workspacePath: agentAtStart.workspacePath,
         prompt: run.prompt,
-        threadId: agentAtStart.codexThreadId,
+        // A run owns its Codex context. The Agent-level field is only a
+        // compatibility mirror for the legacy single-Agent UI.
+        threadId: run.codexThreadId,
+        runId: run.id,
       });
       const completedAt = now();
       await this.store.mutate((database) => {
@@ -299,6 +318,7 @@ export class AgentService {
         storedRun.status = "completed";
         storedRun.output = result.output;
         storedRun.usage = result.usage;
+        storedRun.codexThreadId = result.threadId;
         storedRun.completedAt = completedAt;
         database.messages.push({
           id: randomUUID(),
@@ -309,6 +329,7 @@ export class AgentService {
           createdAt: completedAt,
         });
         agent.status = "ready";
+        // Keep this for the legacy UI; orchestration never reads it to resume.
         agent.codexThreadId = result.threadId;
         agent.lastError = null;
         agent.updatedAt = completedAt;
@@ -349,6 +370,9 @@ export class AgentService {
       }
       if (status === "ready" && agent.status === "busy") {
         throw new HttpError(409, "Stop the active run before starting this Agent");
+      }
+      if (agent.status === "archived") {
+        throw new HttpError(409, "Archived Agents cannot be reactivated");
       }
       agent.status = status;
       if (status === "ready") agent.lastError = null;

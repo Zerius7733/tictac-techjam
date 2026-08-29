@@ -209,11 +209,13 @@ cp deploy/volcengine/terraform.tfvars.example \
 | `ARK_API_KEY` | Required | Ark model API key. |
 | `ARK_MODEL` | Required | Responses-capable endpoint or model ID. |
 | `ARK_BASE_URL` | Beijing v3 endpoint | Ark OpenAI-compatible API URL. |
-| `AUTH_DB_PATH` | `data/auth.db` | SQLite database for users, sessions, permissions, and auth audit events. |
+| `AUTH_DB_PATH` | `data/auth.db` | Combined SQLite database for users, sessions, permissions, Agents, runs, messages, and audit events. |
 | `APP_AUTH_TOKEN` | Empty on loopback | Shared demo token; use 24+ random characters remotely. |
 | `RUNTIME_PROVIDER` | `local-process` | `container` for disposable local Runtime containers. |
 | `CODEX_SANDBOX_MODE` | `workspace-write` | Codex inner sandbox mode. |
 | `CODEX_TIMEOUT_MS` | `600000` | Maximum duration of one turn. |
+| `ORCHESTRATION_RUN_TIMEOUT_MS` | `600000` | Maximum duration of one orchestration Agent turn. |
+| `ORCHESTRATION_JOB_TIMEOUT_MS` | `1800000` | Maximum duration of one orchestration job. |
 | `LOCAL_POC_DATA_ROOT` | Platform-specific | Local metadata, workspace, and session directory. |
 
 See [.env.example](.env.example) for all Runtime and resource-limit options.
@@ -223,7 +225,7 @@ See [.env.example](.env.example) for all Runtime and resource-limit options.
 ```mermaid
 flowchart LR
     UI["React Web UI"] --> API["Fastify control plane"]
-    API --> Store["JSON metadata and Agent workspaces"]
+    API --> Store["SQLite metadata and Agent workspaces"]
     API --> Runtime{"Runtime provider"}
     Runtime -->|Local POC| Container["Disposable Docker / Colima / Podman container"]
     Runtime -->|ECS profile| Codex["Codex CLI in application container"]

@@ -6,6 +6,7 @@ import {
   setAppAuthToken,
   setSessionToken,
 } from "./api";
+import { OrchestrationPanel } from "./OrchestrationPanel";
 import type { Agent, AgentRun, Message, SystemInfo } from "./types";
 
 type AuthStage = "loading" | "app-token" | "login" | "authenticated";
@@ -56,6 +57,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showOrchestration, setShowOrchestration] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [prompt, setPrompt] = useState("");
@@ -138,7 +140,7 @@ export default function App() {
         if (selectedIdRef.current !== selectedId) return;
         const latest = result.runs[0] ?? null;
         setActiveRun(latest);
-        if (latest && ["queued", "running"].includes(latest.status)) {
+        if (latest && ["queued", "running", "waiting"].includes(latest.status)) {
           void pollRun(latest.id, selectedId).catch((reason) =>
             setError(reason instanceof Error ? reason.message : String(reason)),
           );
@@ -171,6 +173,7 @@ export default function App() {
       const { agent } = await api.createAgent(form);
       await refreshAgents();
       setSelectedId(agent.id);
+      setShowOrchestration(false);
       setShowCreate(false);
       setForm(emptyForm);
     } catch (reason) {
@@ -240,7 +243,7 @@ export default function App() {
         if (!mountedRef.current) return;
         const result = await api.run(runId);
         if (selectedIdRef.current === agentId) setActiveRun(result.run);
-        if (!["queued", "running"].includes(result.run.status)) {
+        if (!["queued", "running", "waiting"].includes(result.run.status)) {
           await Promise.all([refreshMessages(agentId), refreshAgents()]);
           return;
         }
@@ -447,6 +450,14 @@ export default function App() {
           <span>＋</span> Create Agent
         </button>
 
+        <button
+          className="button button-ghost orchestration-nav-button"
+          onClick={() => setShowOrchestration(true)}
+          disabled={busy}
+        >
+          <span>⇄</span> Orchestration
+        </button>
+
         <div className="sidebar-label">
           <span>Your Agents</span>
           <span>{agents.length}</span>
@@ -456,7 +467,10 @@ export default function App() {
             <button
               className={"agent-card " + (agent.id === selectedId ? "selected" : "")}
               key={agent.id}
-              onClick={() => setSelectedId(agent.id)}
+              onClick={() => {
+                setSelectedId(agent.id);
+                setShowOrchestration(false);
+              }}
             >
               <div className="agent-avatar">{agent.name.slice(0, 1).toUpperCase()}</div>
               <div className="agent-card-copy">
@@ -520,7 +534,9 @@ export default function App() {
           </div>
         )}
 
-        {selected ? (
+        {showOrchestration ? (
+          <OrchestrationPanel agents={agents} />
+        ) : selected ? (
           <>
             <header className="agent-header">
               <div>
@@ -648,7 +664,7 @@ export default function App() {
                     </article>
                   ))
                 )}
-                {activeRun && ["queued", "running"].includes(activeRun.status) && (
+                {activeRun && ["queued", "running", "waiting"].includes(activeRun.status) && (
                   <article className="message message-assistant thinking">
                     <div className="message-meta">
                       <strong>{selected.name}</strong>
@@ -687,7 +703,7 @@ export default function App() {
                   disabled={
                     selected.status === "stopped" ||
                     selected.status === "busy" ||
-                    activeRun != null && ["queued", "running"].includes(activeRun.status)
+                    activeRun != null && ["queued", "running", "waiting"].includes(activeRun.status)
                   }
                   rows={3}
                 />
@@ -701,7 +717,7 @@ export default function App() {
                       !prompt.trim() ||
                       selected.status === "stopped" ||
                       selected.status === "busy" ||
-                      (activeRun != null && ["queued", "running"].includes(activeRun.status))
+                      (activeRun != null && ["queued", "running", "waiting"].includes(activeRun.status))
                     }
                     aria-label="Send message"
                   >

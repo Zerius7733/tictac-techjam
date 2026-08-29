@@ -84,9 +84,11 @@ When the Agent delegates, add a child `agent_runs` row with the parent
 All child Agents remain separately identifiable in `agent_runs.agent_id`.
 
 On completion, update the run and append a `result` or `error` message in the
-same transaction. A run may be `queued`, `running`, `completed`, `failed`, or
-`cancelled`; the partial unique index prevents two active runs for one Agent,
-preserving the current service invariant.
+same transaction. A run may be `queued`, `running`, `waiting`, `completed`,
+`failed`, or `cancelled`. `waiting` means the run has yielded a delegated child
+or resource request; it keeps the Agent occupied until the parent is resumed.
+The partial unique index prevents two active runs for one Agent, preserving the
+current service invariant.
 
 ## Auth module contract
 
@@ -119,9 +121,11 @@ permission precedence.
 
 ## Migration order
 
-Apply the migrations in order: authentication (`001`), orchestration (`002`),
-then independent Agent identities (`003`). In the current POC, `003` can also
-be applied to the auth-only database because Agent metadata is still stored in
-JSON; the final combined database should add the `agent_id` foreign key once
-the SQLite `agents` table becomes authoritative. Do not create a second
+Apply authentication (`001`) before orchestration (`002`) and its waiting-state
+upgrade (`004`). The independent Agent identity migration (`003`) may run after
+`002`, or alongside authentication before `002`, because it has no foreign key
+to `agents` yet. The server's combined SQLite runtime applies `001`, `003`,
+`002`, and `004` through the migration runner; a legacy JSON file is imported
+only when that database is empty. The `agent_id` foreign key can be tightened
+after the SQLite `agents` table is authoritative. Do not create a second
 `users` table inside the Agent module.

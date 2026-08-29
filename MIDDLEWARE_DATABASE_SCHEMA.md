@@ -127,8 +127,9 @@ conventions:
 The API and database must use the same lowercase values:
 
 ```text
-Agent:   ready | busy | stopped | error
-Job/run: queued | running | completed | failed | cancelled
+Agent:   ready | busy | stopped | error | archived
+Job:     queued | running | completed | failed | cancelled
+Run:     queued | running | waiting | completed | failed | cancelled
 Decision: allow | deny
 ```
 
@@ -338,7 +339,7 @@ child runs through `parent_run_id`.
 | `agent_id` | `TEXT` | Not null, foreign key to `agents.id` | Agent being run |
 | `parent_run_id` | `TEXT` | Nullable, self-foreign key with `ON DELETE SET NULL` | Delegating run, if any |
 | `attempt` | `INTEGER` | Not null, default `1`, greater than zero | Retry attempt number |
-| `status` | `TEXT` | Not null, default `queued` | Run lifecycle state |
+| `status` | `TEXT` | Not null, default `queued` | Run lifecycle state; `waiting` pauses a run while its delegated child/resource request is resolved |
 | `prompt` | `TEXT` | Not null | Prompt/input given to the agent |
 | `input_json` | `TEXT` | Not null, default `{}` | Structured execution options |
 | `output_text` | `TEXT` | Nullable | Agent result |
@@ -353,7 +354,7 @@ child runs through `parent_run_id`.
 | `completed_at` | `TEXT` | Nullable | Terminal-state time |
 
 The partial unique index below enforces the current project invariant that an
-agent has at most one queued or running execution at a time.
+agent has at most one queued, running, or waiting execution at a time.
 
 ### 5.11 `agent_messages`
 
@@ -474,7 +475,7 @@ CREATE TABLE IF NOT EXISTS agents (
     workspace_path   TEXT NOT NULL,
     codex_thread_id  TEXT,
     status           TEXT NOT NULL DEFAULT 'ready' CHECK (
-        status IN ('ready', 'busy', 'stopped', 'error')
+        status IN ('ready', 'busy', 'stopped', 'error', 'archived')
     ),
     last_error       TEXT,
     config_json      TEXT NOT NULL DEFAULT '{}',
@@ -525,7 +526,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     parent_run_id        TEXT,
     attempt              INTEGER NOT NULL DEFAULT 1 CHECK (attempt > 0),
     status               TEXT NOT NULL DEFAULT 'queued' CHECK (
-        status IN ('queued', 'running', 'completed', 'failed', 'cancelled')
+        status IN ('queued', 'running', 'waiting', 'completed', 'failed', 'cancelled')
     ),
     prompt               TEXT NOT NULL,
     input_json           TEXT NOT NULL DEFAULT '{}',
@@ -635,7 +636,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_run_time
 -- Matches the current single-node invariant: one active execution per agent.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_run_per_agent
     ON agent_runs (agent_id)
-    WHERE status IN ('queued', 'running');
+    WHERE status IN ('queued', 'running', 'waiting');
 ```
 
 ## 8. Seed examples
@@ -961,6 +962,8 @@ Use one ordered migration sequence rather than merging database files:
 
 002_auth_seed_or_constraints.sql       # only if needed
 003_orchestration_change.sql           # future change
+004_waiting_agent_runs.sql             # resumable parent-run state
+005_archived_agents.sql                # preserve Agent history on archive
 ```
 
 If the contributors work on separate initial scripts, combine them manually

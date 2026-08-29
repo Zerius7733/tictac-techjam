@@ -34,14 +34,18 @@ any non-demo environment.
 
 ## Combined local database
 
-When the orchestration migration is ready, apply both migrations in order:
+The server uses one combined SQLite file. The migration runner applies the
+orchestration migrations after authentication; for a manual setup, apply them
+in order:
 
 ```sh
 mkdir -p data
-sqlite3 data/middleware.db < db/migrations/001_authentication.sql
-sqlite3 data/middleware.db < db/migrations/002_multi_agent_orchestration.sql
-sqlite3 data/middleware.db < db/migrations/003_agent_principals.sql
-sqlite3 data/middleware.db < db/seeds/development_auth.sql
+sqlite3 data/auth.db < db/migrations/001_authentication.sql
+sqlite3 data/auth.db < db/migrations/002_multi_agent_orchestration.sql
+sqlite3 data/auth.db < db/migrations/003_agent_principals.sql
+sqlite3 data/auth.db < db/migrations/004_waiting_agent_runs.sql
+sqlite3 data/auth.db < db/migrations/005_archived_agents.sql
+sqlite3 data/auth.db < db/seeds/development_auth.sql
 ```
 
 The orchestration migration references the auth-owned `users` and `audit_logs`

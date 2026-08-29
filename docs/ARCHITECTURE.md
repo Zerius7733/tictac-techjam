@@ -6,7 +6,7 @@ Volc Agent Launchpad is a single-node control plane for hackathon use.
 flowchart LR
     UI["React Web UI"] --> API["Fastify API"]
     API --> Service["AgentService"]
-    Service --> Store["JSON store"]
+    Service --> Store["SQLite orchestration store"]
     Service --> Workspace["Agent workspace"]
     Service --> Runner{"AgentRunner"}
     Runner -->|Local POC| Container["Disposable Runtime container"]
@@ -39,22 +39,35 @@ ready -> busy -> ready
   |       |
   v       v
 stopped  error
+   \       /
+    `-> archived
 ```
 
-Interrupted Runs become `cancelled` after a restart.
+Interrupted Runs become `cancelled` after a restart. Archived Agents retain
+their runs and messages for history inspection.
+
+Delegated runs can pause without releasing their Agent:
+
+```text
+queued -> running -> waiting -> running -> completed
+                         \-> failed/cancelled
+```
 
 ### Storage
 
 ```text
-data/auth.db              Users, roles, sessions, permissions, Agent principals, auth audits
-data/launchpad.json       Agent, ownership, message, and Run metadata
+data/auth.db              Users, roles, sessions, permissions, Agents, runs, messages, auth audits
+data/launchpad.json       Legacy import source used only when the SQLite database is empty
 workspaces/AgentID/       Agent-created files
 workspaces/.deleted/      Archived deleted workspaces
 codex-home/               Codex configuration and sessions
 ```
 
-`JsonStore` serializes writes and atomically replaces one JSON file. It supports
-one process only.
+`SqliteAgentStore` is the active runtime persistence adapter. It applies the
+auth prerequisite followed by orchestration migrations and keeps the existing
+AgentService response models stable during the cutover. A legacy
+`launchpad.json` file is imported once on first start when no SQLite Agents
+exist; SQLite is then the source of truth.
 
 `AuthStore` uses Node's built-in SQLite support for the authentication
 migration. It stores only password hashes and session-token hashes. In
