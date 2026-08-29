@@ -23,7 +23,16 @@ export class JsonStore {
       if (parsed.version !== 1 || !Array.isArray(parsed.agents)) {
         throw new Error("Unsupported database format");
       }
-      this.data = parsed;
+      // Older local JSON stores predate ownership. Keep those records readable
+      // for admin/system access, but do not expose them to ordinary users.
+      this.data = {
+        ...parsed,
+        agents: parsed.agents.map((agent) => ({
+          ...agent,
+          ownerUserId: agent.ownerUserId ?? null,
+          principalId: agent.principalId ?? null,
+        })),
+      };
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
         throw error;

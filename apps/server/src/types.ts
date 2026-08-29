@@ -4,6 +4,10 @@ export type MessageRole = "user" | "assistant";
 
 export interface Agent {
   id: string;
+  /** The authenticated user who created this Agent; null for legacy/system Agents. */
+  ownerUserId: string | null;
+  /** Independent Agent identity; null for legacy/system Agents. */
+  principalId: string | null;
   name: string;
   description: string;
   instructions: string;

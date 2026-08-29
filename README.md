@@ -100,6 +100,11 @@ In the Web UI:
 The Agent can write files, run commands, and continue the same Codex session in
 later messages.
 
+In development, the server automatically initializes `data/auth.db` and shows
+the login screen. Use `alice / alice-demo-2026` or `bob / bob-demo-2026` for the
+seeded demo accounts. If `APP_AUTH_TOKEN` is configured, enter that platform
+token first and then sign in with one of these accounts.
+
 ### 5. Stop and resume
 
 Press `Ctrl+C` in the startup terminal. The script removes temporary Runtime
@@ -171,6 +176,7 @@ Use local paths in `.env` when running outside Docker:
 
 ```dotenv
 APP_DATA_DIR=.data
+AUTH_DB_PATH=data/auth.db
 AGENT_WORKSPACE_ROOT=workspaces
 CODEX_HOME=codex-home
 ```
@@ -203,6 +209,7 @@ cp deploy/volcengine/terraform.tfvars.example \
 | `ARK_API_KEY` | Required | Ark model API key. |
 | `ARK_MODEL` | Required | Responses-capable endpoint or model ID. |
 | `ARK_BASE_URL` | Beijing v3 endpoint | Ark OpenAI-compatible API URL. |
+| `AUTH_DB_PATH` | `data/auth.db` | SQLite database for users, sessions, permissions, and auth audit events. |
 | `APP_AUTH_TOKEN` | Empty on loopback | Shared demo token; use 24+ random characters remotely. |
 | `RUNTIME_PROVIDER` | `local-process` | `container` for disposable local Runtime containers. |
 | `CODEX_SANDBOX_MODE` | `workspace-write` | Codex inner sandbox mode. |

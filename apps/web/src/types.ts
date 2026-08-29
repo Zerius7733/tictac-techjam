@@ -3,6 +3,8 @@ export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancell
 
 export interface Agent {
   id: string;
+  ownerUserId: string | null;
+  principalId: string | null;
   name: string;
   description: string;
   instructions: string;

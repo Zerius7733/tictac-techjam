@@ -53,6 +53,12 @@ body {
   color: var(--muted);
 }
 
+.auth-demo-hint {
+  margin: 18px 0 0 !important;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .auth-card label,
 .auth-card input,
 .auth-card button {
@@ -338,6 +344,66 @@ button {
   font-size: 9px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.user-card {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  padding: 9px;
+  border: 1px solid #3d3d38;
+  border-radius: 12px;
+  background: #292925;
+}
+
+.user-avatar {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: #e3ddff;
+  background: #4a415f;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.user-copy {
+  min-width: 0;
+}
+
+.user-copy strong,
+.user-copy span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.user-copy strong {
+  color: #edebe4;
+  font-size: 11px;
+}
+
+.user-copy span {
+  color: #85857e;
+  margin-top: 2px;
+  font-size: 9px;
+}
+
+.button-logout {
+  min-height: 28px;
+  padding: 0 8px;
+  color: #bdbbb2;
+  background: transparent;
+  font-size: 10px;
+}
+
+.button-logout:hover:not(:disabled) {
+  color: #fff;
+  background: #3b3b36;
 }
 
 .eyebrow {
@@ -991,7 +1057,8 @@ textarea:focus {
   .sidebar-label,
   .agent-card-copy,
   .mini-dot,
-  .runtime-card {
+  .runtime-card,
+  .user-card {
     display: none;
   }
 

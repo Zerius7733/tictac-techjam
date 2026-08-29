@@ -9,16 +9,26 @@ export class ApiError extends Error {
   }
 }
 
-let authToken = "";
+let appAuthToken = "";
+let sessionToken = "";
 
-export function setAuthToken(token: string): void {
-  authToken = token.trim();
+export function setAppAuthToken(token: string): void {
+  appAuthToken = token.trim();
+}
+
+export function setSessionToken(token: string): void {
+  sessionToken = token.trim();
+}
+
+export function clearSessionToken(): void {
+  sessionToken = "";
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const headers = {
     ...(options?.body ? { "Content-Type": "application/json" } : {}),
-    ...(authToken ? { Authorization: "Bearer " + authToken } : {}),
+    ...(appAuthToken ? { "X-App-Auth-Token": appAuthToken } : {}),
+    ...(sessionToken ? { Authorization: "Bearer " + sessionToken } : {}),
     ...options?.headers,
   };
   const response = await fetch(url, {
@@ -33,7 +43,38 @@ async function request<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  auth: () => request<{ required: boolean }>("/api/auth"),
+  auth: () =>
+    request<{
+      required: boolean;
+      sharedTokenRequired: boolean;
+      loginRequired: boolean;
+      authenticated: boolean;
+      user: {
+        id: string;
+        username: string;
+        displayName: string | null;
+        roleNames: string[];
+      } | null;
+    }>("/api/auth"),
+  authAccess: () => request<{ ok: boolean }>("/api/auth/access"),
+  login: (body: { username: string; password: string }) =>
+    request<{
+      sessionToken: string;
+      expiresAt: string;
+      user: {
+        id: string;
+        username: string;
+        displayName: string | null;
+        roleNames: string[];
+      };
+    }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  logout: () =>
+    request<{ ok: boolean }>("/api/auth/logout", {
+      method: "POST",
+    }),
   system: () => request<SystemInfo>("/api/system"),
   listAgents: () => request<{ agents: Agent[] }>("/api/agents"),
   createAgent: (body: {

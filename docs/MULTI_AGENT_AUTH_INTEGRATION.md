@@ -4,6 +4,10 @@ This note complements [MIDDLEWARE_DATABASE_SCHEMA.md](../MIDDLEWARE_DATABASE_SCH
 which is the repository’s SQLite design reference for authentication and
 orchestration. The executable orchestration migration is
 [002_multi_agent_orchestration.sql](../db/migrations/002_multi_agent_orchestration.sql).
+The executable authentication migration is
+[001_authentication.sql](../db/migrations/001_authentication.sql).
+The independent Agent identity migration is
+[003_agent_principals.sql](../db/migrations/003_agent_principals.sql).
 
 ## Ownership boundary
 
@@ -12,6 +16,7 @@ The authentication side owns:
 - `users`, including active/inactive state;
 - `roles`, `user_roles`, and `permissions`;
 - `auth_sessions`; and
+- `agent_principals`, which gives each Agent an independent identity; and
 - the base `audit_logs` record for each request and authorization decision.
 
 The multi-agent side owns:
@@ -33,6 +38,8 @@ Agent-specific context without copying authentication logic.
 auth_sessions.user_id -> users.id       human caller
 orchestration_jobs.user_id              human who submitted the job
 agent_runs.agent_id                     Agent that executed the run
+agent_principals.agent_id               independent identity for that Agent
+agent_principals.owner_user_id          human owner of that Agent identity
 agent_runs.parent_run_id                delegating run, when applicable
 audit_agent_context.agent_id            Agent involved in the audited action
 audit_agent_context.run_id              concrete execution evidence
@@ -112,6 +119,9 @@ permission precedence.
 
 ## Migration order
 
-Apply the authentication migration first so that `users` and `audit_logs` exist;
-then apply `002_multi_agent_orchestration.sql`. Keep the migrations separate
-and ordered. Do not create a second `users` table inside the Agent module.
+Apply the migrations in order: authentication (`001`), orchestration (`002`),
+then independent Agent identities (`003`). In the current POC, `003` can also
+be applied to the auth-only database because Agent metadata is still stored in
+JSON; the final combined database should add the `agent_id` foreign key once
+the SQLite `agents` table becomes authoritative. Do not create a second
+`users` table inside the Agent module.

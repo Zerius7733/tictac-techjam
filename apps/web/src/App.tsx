@@ -1,6 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, setAuthToken } from "./api";
+import {
+  api,
+  ApiError,
+  clearSessionToken,
+  setAppAuthToken,
+  setSessionToken,
+} from "./api";
 import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+
+type AuthStage = "loading" | "app-token" | "login" | "authenticated";
+
+interface AuthUser {
+  id: string;
+  username: string;
+  displayName: string | null;
+  roleNames: string[];
+}
 
 const starterPrompts = [
   "Create a small TypeScript CLI that prints a weather summary from sample JSON.",
@@ -47,8 +62,12 @@ export default function App() {
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [authRequired, setAuthRequired] = useState<boolean | null>(null);
-  const [authInput, setAuthInput] = useState("");
+  const [authStage, setAuthStage] = useState<AuthStage>("loading");
+  const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
+  const [sharedTokenRequired, setSharedTokenRequired] = useState(false);
+  const [appAuthInput, setAppAuthInput] = useState("");
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
   const messageEnd = useRef<HTMLDivElement>(null);
   const selectedIdRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
@@ -85,10 +104,21 @@ export default function App() {
     mountedRef.current = true;
     void api
       .auth()
-      .then(async ({ required }) => {
+      .then(async (status) => {
         if (!mountedRef.current) return;
-        setAuthRequired(required);
-        if (!required) await bootstrap();
+        setSharedTokenRequired(status.sharedTokenRequired);
+        if (status.authenticated && status.user) {
+          setCurrentUser(status.user);
+          setAuthStage("authenticated");
+          await bootstrap();
+        } else if (status.sharedTokenRequired) {
+          setAuthStage("app-token");
+        } else if (status.loginRequired) {
+          setAuthStage("login");
+        } else {
+          setAuthStage("authenticated");
+          await bootstrap();
+        }
       })
       .catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)));
     return () => {
@@ -245,18 +275,19 @@ export default function App() {
     }
   };
 
-  const unlock = async (event: React.FormEvent) => {
+  const unlockWithAppToken = async (event: React.FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError(null);
-    setAuthToken(authInput);
+    setAppAuthToken(appAuthInput);
     try {
-      await bootstrap();
-      setAuthRequired(false);
-      setAuthInput("");
+      await api.authAccess();
+      setAuthStage("login");
+      setAppAuthInput("");
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 401) {
-        setError("The access token is not valid.");
+        setError("The application access token is not valid.");
+        setAppAuthToken("");
       } else {
         setError(reason instanceof Error ? reason.message : String(reason));
       }
@@ -265,7 +296,52 @@ export default function App() {
     }
   };
 
-  if (authRequired === null) {
+  const login = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.login({ username, password });
+      setSessionToken(result.sessionToken);
+      setCurrentUser(result.user);
+      setAuthStage("authenticated");
+      setPassword("");
+      await bootstrap();
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status === 401) {
+        setError("Username or password is incorrect.");
+      } else {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const logout = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.logout();
+    } catch (reason) {
+      if (!(reason instanceof ApiError && reason.status === 401)) {
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
+    } finally {
+      clearSessionToken();
+      setAppAuthToken("");
+      setCurrentUser(null);
+      setAgents([]);
+      setMessages([]);
+      setSelectedId(null);
+      setActiveRun(null);
+      setSystem(null);
+      setAuthStage(sharedTokenRequired ? "app-token" : "login");
+      setBusy(false);
+    }
+  };
+
+  if (authStage === "loading") {
     return (
       <main className="auth-screen">
         <section className="auth-card" aria-live="polite">
@@ -278,29 +354,69 @@ export default function App() {
     );
   }
 
-  if (authRequired) {
+  if (authStage === "app-token") {
     return (
       <main className="auth-screen">
-        <form className="auth-card" onSubmit={unlock}>
+        <form className="auth-card" onSubmit={unlockWithAppToken}>
           <div className="brand-mark">A</div>
           <span className="eyebrow">Agent Launchpad</span>
-          <h1>Enter the access token</h1>
+          <h1>Enter the platform token</h1>
           <p>This shared demo token is configured by the platform operator.</p>
           {error && <div className="error-banner" role="alert">{error}</div>}
           <label>
-            Access token
+            Platform access token
             <input
               autoFocus
               type="password"
-              value={authInput}
-              onChange={(event) => setAuthInput(event.target.value)}
-              autoComplete="current-password"
+              value={appAuthInput}
+              onChange={(event) => setAppAuthInput(event.target.value)}
+              autoComplete="off"
               required
             />
           </label>
-          <button className="button button-primary" disabled={busy || !authInput.trim()}>
-            {busy ? <Spinner /> : "Open Launchpad"}
+          <button className="button button-primary" disabled={busy || !appAuthInput.trim()}>
+            {busy ? <Spinner /> : "Continue"}
           </button>
+        </form>
+      </main>
+    );
+  }
+
+  if (authStage === "login") {
+    return (
+      <main className="auth-screen">
+        <form className="auth-card" onSubmit={login}>
+          <div className="brand-mark">A</div>
+          <span className="eyebrow">Agent Launchpad</span>
+          <h1>Sign in to Launchpad</h1>
+          <p>Use your individual account to access your Agents and permissions.</p>
+          {error && <div className="error-banner" role="alert">{error}</div>}
+          <label>
+            Username
+            <input
+              autoFocus
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              autoComplete="username"
+              placeholder="alice"
+              required
+            />
+          </label>
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              autoComplete="current-password"
+              placeholder="Your password"
+              required
+            />
+          </label>
+          <button className="button button-primary" disabled={busy || !username.trim() || !password}>
+            {busy ? <Spinner /> : "Sign in"}
+          </button>
+          <p className="auth-demo-hint">Development accounts: alice or bob. Credentials are in the database README.</p>
         </form>
       </main>
     );
@@ -366,6 +482,18 @@ export default function App() {
             {system?.containerEngine ? " · " + system.containerEngine : ""}
           </span>
         </div>
+        {currentUser && (
+          <div className="user-card">
+            <div className="user-avatar">{(currentUser.displayName ?? currentUser.username).slice(0, 1).toUpperCase()}</div>
+            <div className="user-copy">
+              <strong>{currentUser.displayName ?? currentUser.username}</strong>
+              <span>@{currentUser.username}</span>
+            </div>
+            <button className="button button-logout" onClick={() => void logout()} disabled={busy}>
+              Log out
+            </button>
+          </div>
+        )}
       </aside>
 
       <main className="main">

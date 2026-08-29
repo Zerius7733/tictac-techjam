@@ -1,9 +1,14 @@
 import cors from "@fastify/cors";
 import fastifyStatic from "@fastify/static";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, {
+  type FastifyInstance,
+  type FastifyReply,
+  type FastifyRequest,
+} from "fastify";
 import { timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
+import { AuthStore } from "./auth-store.js";
 import type { AppConfig } from "./config.js";
 import { HttpError } from "./errors.js";
 import type { AgentService } from "./agent-service.js";
@@ -22,15 +27,98 @@ const updateAgentBody = createAgentBody.partial().refine(
 const messageBody = z.object({
   content: z.string().trim().min(1).max(50_000),
 });
+const loginBody = z.object({
+  username: z.string().trim().min(1).max(120),
+  password: z.string().min(1).max(256),
+});
+
+type ResourceType = "agent" | "run" | "orchestration" | "system";
+
+function requestPath(request: FastifyRequest): string {
+  return request.url.split("?", 1)[0] ?? request.url;
+}
+
+function isRoute(request: FastifyRequest, method: string, path: string): boolean {
+  return request.method === method && requestPath(request) === path;
+}
+
+function bearerToken(request: FastifyRequest): string {
+  const header = request.headers.authorization ?? "";
+  return header.startsWith("Bearer ") ? header.slice(7) : "";
+}
+
+function sharedToken(request: FastifyRequest): string {
+  const header = request.headers["x-app-auth-token"];
+  return typeof header === "string" ? header : "";
+}
+
+function safelyEquals(candidate: string, expected: string): boolean {
+  const candidateBuffer = Buffer.from(candidate);
+  const expectedBuffer = Buffer.from(expected);
+  return (
+    candidateBuffer.length === expectedBuffer.length &&
+    timingSafeEqual(candidateBuffer, expectedBuffer)
+  );
+}
+
+function agentAccess(
+  request: FastifyRequest,
+  authStore: AuthStore | undefined,
+): { ownerUserId: string | undefined; includeAll: boolean } {
+  // The no-auth mode is still useful for local service tests. Once the auth
+  // store is enabled, every request is scoped to its session owner unless the
+  // authenticated user has the explicit admin role.
+  if (!authStore) return { ownerUserId: undefined, includeAll: true };
+  return {
+    ownerUserId: request.auth?.userId,
+    includeAll:
+      request.auth?.roleNames.some((role) => role.toLowerCase() === "admin") ?? false,
+  };
+}
+
+function requirePermission(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  authStore: AuthStore | undefined,
+  action: string,
+  resourceType: ResourceType,
+  resourceKey: string,
+): boolean {
+  if (!authStore) return true;
+  if (!request.auth) {
+    void reply.code(401).send({ error: "Authentication required" });
+    return false;
+  }
+  const decision = authStore.authorize(
+    request.auth,
+    action,
+    resourceType,
+    resourceKey,
+  );
+  if (!decision.allowed) {
+    void reply.code(403).send({
+      error: "Forbidden",
+      reasonCode: decision.reasonCode,
+      requestId: request.id,
+    });
+    return false;
+  }
+  return true;
+}
 
 export async function createApp(
   config: AppConfig,
   service: AgentService,
+  authStore?: AuthStore,
 ): Promise<FastifyInstance> {
   const app = Fastify({
     logger: {
       level: config.logLevel,
-      redact: ["req.headers.authorization", "req.headers.cookie"],
+      redact: [
+        "req.headers.authorization",
+        "req.headers.cookie",
+        "req.headers['x-app-auth-token']",
+      ],
     },
     bodyLimit: 1_048_576,
   });
@@ -40,25 +128,36 @@ export async function createApp(
       config.nodeEnv === "development"
         ? ["http://localhost:5173", "http://127.0.0.1:5173"]
         : false,
+    allowedHeaders: ["Content-Type", "Authorization", "X-App-Auth-Token"],
   });
 
+  app.decorateRequest("auth", null);
   app.addHook("onRequest", async (request, reply) => {
-    if (
-      !config.authToken ||
-      !request.url.startsWith("/api/") ||
-      request.url === "/api/health" ||
-      request.url === "/api/auth"
-    ) {
-      return;
+    const path = requestPath(request);
+    if (!path.startsWith("/api/")) return;
+
+    const isHealth = isRoute(request, "GET", "/api/health");
+    const isAuthInfo = isRoute(request, "GET", "/api/auth");
+    const isLogin = isRoute(request, "POST", "/api/auth/login");
+    const isAccessCheck = isRoute(request, "GET", "/api/auth/access");
+
+    if (config.authToken && !isHealth && !isAuthInfo) {
+      // With database auth enabled, the shared deployment token uses its own
+      // header so Authorization can carry the per-user session token.
+      // Without a database store, retain the original Bearer-token behavior.
+      const candidate = sharedToken(request) || (!authStore ? bearerToken(request) : "");
+      if (!safelyEquals(candidate, config.authToken)) {
+        return reply.code(401).send({ error: "Application access token required" });
+      }
     }
-    const header = request.headers.authorization ?? "";
-    const candidate = header.startsWith("Bearer ") ? header.slice(7) : "";
-    const expectedBuffer = Buffer.from(config.authToken);
-    const candidateBuffer = Buffer.from(candidate);
-    const valid =
-      candidateBuffer.length === expectedBuffer.length &&
-      timingSafeEqual(candidateBuffer, expectedBuffer);
-    if (!valid) {
+
+    if (!authStore || isHealth) return;
+
+    request.auth = bearerToken(request)
+      ? authStore.authenticate(bearerToken(request), request.id)
+      : null;
+
+    if (!isAuthInfo && !isLogin && !isAccessCheck && !request.auth) {
       return reply.code(401).send({ error: "Authentication required" });
     }
   });
@@ -68,64 +167,148 @@ export async function createApp(
     service: "volc-agent-launchpad",
   }));
 
-  app.get("/api/auth", async () => ({ required: config.authToken.length > 0 }));
+  app.get("/api/auth", async (request) => ({
+    required: Boolean(authStore) || config.authToken.length > 0,
+    sharedTokenRequired: config.authToken.length > 0,
+    loginRequired: Boolean(authStore),
+    authenticated: Boolean(request.auth),
+    user: request.auth
+      ? {
+          id: request.auth.id,
+          username: request.auth.username,
+          displayName: request.auth.displayName,
+          roleNames: request.auth.roleNames,
+        }
+      : null,
+  }));
+
+  app.get("/api/auth/access", async () => ({ ok: true }));
+
+  app.post("/api/auth/login", async (request, reply) => {
+    if (!authStore) {
+      return reply.code(503).send({ error: "Database authentication is not configured" });
+    }
+    const body = loginBody.parse(request.body);
+    const result = authStore.login(body.username, body.password, request.id);
+    if (!result) {
+      return reply.code(401).send({ error: "Invalid username or password" });
+    }
+    return result;
+  });
+
+  app.get("/api/auth/me", async (request, reply) => {
+    if (!request.auth) {
+      return reply.code(401).send({ error: "Authentication required" });
+    }
+    return { user: request.auth };
+  });
+
+  app.post("/api/auth/logout", async (request, reply) => {
+    if (!authStore || !request.auth) {
+      return reply.code(401).send({ error: "Authentication required" });
+    }
+    authStore.logout(request.auth);
+    return { ok: true };
+  });
 
   app.get("/api/system", async () => service.systemInfo());
 
-  app.get("/api/agents", async () => ({ agents: service.listAgents() }));
+  app.get("/api/agents", async (request, reply) => {
+    if (!requirePermission(request, reply, authStore, "view", "agent", "*")) return;
+    const access = agentAccess(request, authStore);
+    return { agents: service.listAgents(access.ownerUserId, access.includeAll) };
+  });
 
   app.post("/api/agents", async (request, reply) => {
+    if (!requirePermission(request, reply, authStore, "create", "agent", "*")) return;
     const body = createAgentBody.parse(request.body);
-    const agent = await service.createAgent(body);
+    const access = agentAccess(request, authStore);
+    const agent = await service.createAgent(body, access.ownerUserId);
     return reply.code(201).send({ agent });
   });
 
-  app.get("/api/agents/:id", async (request) => {
+  app.get("/api/agents/:id", async (request, reply) => {
     const { id } = agentIdParams.parse(request.params);
-    return { agent: service.getAgent(id) };
+    if (!requirePermission(request, reply, authStore, "view", "agent", id)) return;
+    const access = agentAccess(request, authStore);
+    return { agent: service.getAgent(id, access.ownerUserId, access.includeAll) };
   });
 
-  app.patch("/api/agents/:id", async (request) => {
+  app.patch("/api/agents/:id", async (request, reply) => {
     const { id } = agentIdParams.parse(request.params);
+    if (!requirePermission(request, reply, authStore, "update", "agent", id)) return;
     const body = updateAgentBody.parse(request.body);
-    return { agent: await service.updateAgent(id, body) };
+    const access = agentAccess(request, authStore);
+    return {
+      agent: await service.updateAgent(
+        id,
+        body,
+        access.ownerUserId,
+        access.includeAll,
+      ),
+    };
   });
 
-  app.delete("/api/agents/:id", async (request) => {
+  app.delete("/api/agents/:id", async (request, reply) => {
     const { id } = agentIdParams.parse(request.params);
-    return service.deleteAgent(id);
+    if (!requirePermission(request, reply, authStore, "delete", "agent", id)) return;
+    const access = agentAccess(request, authStore);
+    return service.deleteAgent(id, access.ownerUserId, access.includeAll);
   });
 
-  app.post("/api/agents/:id/start", async (request) => {
+  app.post("/api/agents/:id/start", async (request, reply) => {
     const { id } = agentIdParams.parse(request.params);
-    return { agent: await service.startAgent(id) };
+    if (!requirePermission(request, reply, authStore, "start", "agent", id)) return;
+    const access = agentAccess(request, authStore);
+    return {
+      agent: await service.startAgent(id, access.ownerUserId, access.includeAll),
+    };
   });
 
-  app.post("/api/agents/:id/stop", async (request) => {
+  app.post("/api/agents/:id/stop", async (request, reply) => {
     const { id } = agentIdParams.parse(request.params);
-    return { agent: await service.stopAgent(id) };
+    if (!requirePermission(request, reply, authStore, "stop", "agent", id)) return;
+    const access = agentAccess(request, authStore);
+    return {
+      agent: await service.stopAgent(id, access.ownerUserId, access.includeAll),
+    };
   });
 
-  app.get("/api/agents/:id/messages", async (request) => {
+  app.get("/api/agents/:id/messages", async (request, reply) => {
     const { id } = agentIdParams.parse(request.params);
-    return { messages: service.getMessages(id) };
+    if (!requirePermission(request, reply, authStore, "view", "agent", id)) return;
+    const access = agentAccess(request, authStore);
+    return {
+      messages: service.getMessages(id, access.ownerUserId, access.includeAll),
+    };
   });
 
-  app.get("/api/agents/:id/runs", async (request) => {
+  app.get("/api/agents/:id/runs", async (request, reply) => {
+    if (!requirePermission(request, reply, authStore, "view", "run", "*")) return;
     const { id } = agentIdParams.parse(request.params);
-    return { runs: service.getRuns(id) };
+    const access = agentAccess(request, authStore);
+    return { runs: service.getRuns(id, access.ownerUserId, access.includeAll) };
   });
 
   app.post("/api/agents/:id/messages", async (request, reply) => {
     const { id } = agentIdParams.parse(request.params);
+    if (!requirePermission(request, reply, authStore, "invoke", "agent", id)) return;
     const body = messageBody.parse(request.body);
-    const result = await service.sendMessage(id, body.content);
+    const access = agentAccess(request, authStore);
+    const result = await service.sendMessage(
+      id,
+      body.content,
+      access.ownerUserId,
+      access.includeAll,
+    );
     return reply.code(202).send(result);
   });
 
-  app.get("/api/runs/:id", async (request) => {
+  app.get("/api/runs/:id", async (request, reply) => {
     const { id } = runIdParams.parse(request.params);
-    return { run: service.getRun(id) };
+    if (!requirePermission(request, reply, authStore, "view", "run", id)) return;
+    const access = agentAccess(request, authStore);
+    return { run: service.getRun(id, access.ownerUserId, access.includeAll) };
   });
 
   if (config.nodeEnv === "production") {

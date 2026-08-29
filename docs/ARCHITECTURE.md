@@ -24,8 +24,10 @@ Runs. It never receives the Ark API key.
 
 ### Fastify API
 
-Validates requests, protects remote demos with a shared bearer token, and
-serves the compiled Web UI. The token is not user identity or authorization.
+Authenticates database-backed users, checks role permissions before protected
+Agent actions, optionally protects remote demos with the shared
+`APP_AUTH_TOKEN` deployment gate, and serves the compiled Web UI. The shared
+token is not user identity or authorization.
 
 ### AgentService
 
@@ -44,7 +46,8 @@ Interrupted Runs become `cancelled` after a restart.
 ### Storage
 
 ```text
-data/launchpad.json       Agent, message, and Run metadata
+data/auth.db              Users, roles, sessions, permissions, Agent principals, auth audits
+data/launchpad.json       Agent, ownership, message, and Run metadata
 workspaces/AgentID/       Agent-created files
 workspaces/.deleted/      Archived deleted workspaces
 codex-home/               Codex configuration and sessions
@@ -52,6 +55,11 @@ codex-home/               Codex configuration and sessions
 
 `JsonStore` serializes writes and atomically replaces one JSON file. It supports
 one process only.
+
+`AuthStore` uses Node's built-in SQLite support for the authentication
+migration. It stores only password hashes and session-token hashes. In
+development it applies the deterministic Alice/Bob seed; production does not
+auto-seed demo users.
 
 ### Runtime providers
 
@@ -75,7 +83,7 @@ the stored Codex thread, and escalate termination after a grace period.
 | Track | Primary seam | Expected change |
 | --- | --- | --- |
 | Glass Box | `AgentRunner`, `AgentRun` | Emit and display correlated execution events. |
-| Bouncer | API routes, Agent ownership | Add identity and server-side authorization. |
+| Bouncer | API routes, Agent identity | Human identity, object-level ownership, and independent per-Agent principals. |
 | Kill Switch | `AgentRunner` | Add threat-specific policy or a stronger sandbox. |
 
 The current container or ECS instance is the POC trust boundary. Ordinary
