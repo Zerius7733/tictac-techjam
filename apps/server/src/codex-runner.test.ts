@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCodexArgs, parseCodexEventLine } from "./codex-runner.js";
+import { buildCodexArgs, formatRunnerPrompt, parseCodexEventLine } from "./codex-runner.js";
 
 describe("Codex runner protocol", () => {
   it("builds a new-session invocation", () => {
@@ -35,6 +35,26 @@ describe("Codex runner protocol", () => {
       "workspace-write",
     );
     expect(args.slice(-3)).toEqual(["resume", "thread-123", "add tests"]);
+  });
+
+  it("includes authenticated human context without credentials", () => {
+    const prompt = formatRunnerPrompt({
+      agentId: "agent",
+      workspacePath: "/tmp/workspace",
+      prompt: "Who am I?",
+      threadId: null,
+      humanIdentity: {
+        username: "alice",
+        displayName: "Alice",
+        roleNames: ["developer"],
+      },
+    });
+
+    expect(prompt).toContain('"username":"alice"');
+    expect(prompt).toContain("The human chatting with you is this authenticated user");
+    expect(prompt).toContain("Who am I?");
+    expect(prompt).not.toContain("sessionToken");
+    expect(prompt).not.toContain("agt_");
   });
 
   it("extracts the session, final message and usage", () => {

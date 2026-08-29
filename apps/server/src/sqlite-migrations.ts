@@ -21,16 +21,46 @@ export class SqliteMigrationRunner {
   async apply(): Promise<void> {
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     this.assertMigrationLedger();
+    // A previous release used versions 004/005 for the policy and credential
+    // migrations. Keep a small compatibility ledger so those databases can
+    // receive the orchestration waiting/archive migrations without changing
+    // or deleting already-applied policy history.
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migration_aliases (
+        name       TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+    `);
 
     const migrations = [...this.migrations].sort(
       (left, right) => left.version - right.version,
     );
     for (const migration of migrations) {
+      const appliedByName = this.database
+        .prepare(
+          `SELECT version FROM schema_migrations WHERE name = ?
+           UNION ALL
+           SELECT NULL AS version FROM schema_migration_aliases WHERE name = ?`,
+        )
+        .get(migration.name, migration.name) as { version?: number | null } | undefined;
+      if (appliedByName) continue;
+
       const applied = this.database
         .prepare("SELECT name FROM schema_migrations WHERE version = ?")
         .get(migration.version) as { name?: string } | undefined;
       if (applied) {
         if (applied.name !== migration.name) {
+          if (isLegacyAlias(migration.name, applied.name)) {
+            const sql = await readFile(migration.path, "utf8");
+            this.database.exec(sql);
+            this.database
+              .prepare(
+                `INSERT OR IGNORE INTO schema_migration_aliases (name)
+                 VALUES (?)`,
+              )
+              .run(migration.name);
+            continue;
+          }
           throw new Error(
             `Migration ${migration.version} is recorded as ${applied.name}, expected ${migration.name}`,
           );
@@ -60,4 +90,13 @@ export class SqliteMigrationRunner {
       );
     }
   }
+}
+
+function isLegacyAlias(migrationName: string, appliedName: string | undefined): boolean {
+  return (
+    (migrationName === "004_waiting_agent_runs.sql" &&
+      appliedName === "004_agent_policy.sql") ||
+    (migrationName === "005_archived_agents.sql" &&
+      appliedName === "005_agent_credentials.sql")
+  );
 }

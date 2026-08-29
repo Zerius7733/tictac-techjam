@@ -420,7 +420,7 @@ persisted child result; that worker is not implemented yet.
 
 | Area | Current status |
 | --- | --- |
-| SQLite migrations, foreign keys, indexes, `waiting` state, and archived Agents | Implemented in migrations `001`–`005`. |
+| SQLite migrations, foreign keys, indexes, `waiting` state, and archived Agents | Implemented in migrations `001`–`005`; delegated policy and Agent credentials are `006`–`007`. |
 | Jobs, runs, messages, thread persistence, usage accumulation | Implemented by `OrchestrationSqliteRepository`. |
 | Agent JSON-to-SQLite cutover and one-time import | Implemented by `SqliteAgentStore`; JSON remains a legacy import source. |
 | Structured command validation and sequential dispatcher | Implemented with fake dependencies and focused tests. |

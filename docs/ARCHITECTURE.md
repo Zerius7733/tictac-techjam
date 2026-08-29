@@ -5,8 +5,11 @@ Volc Agent Launchpad is a single-node control plane for hackathon use.
 ```mermaid
 flowchart LR
     UI["React Web UI"] --> API["Fastify API"]
+    API --> Auth["AuthStore"]
+    API --> Policy["AgentPolicyGateway"]
     API --> Service["AgentService"]
     Service --> Store["SQLite orchestration store"]
+    Policy --> Auth
     Service --> Workspace["Agent workspace"]
     Service --> Runner{"AgentRunner"}
     Runner -->|Local POC| Container["Disposable Runtime container"]
@@ -25,9 +28,14 @@ Runs. It never receives the Ark API key.
 ### Fastify API
 
 Authenticates database-backed users, checks role permissions before protected
-Agent actions, optionally protects remote demos with the shared
+Agent actions, and routes Agent tool calls through the delegated policy
+gateway. It optionally protects remote demos with the shared
 `APP_AUTH_TOKEN` deployment gate, and serves the compiled Web UI. The shared
 token is not user identity or authorization.
+
+Human management requests use `Authorization: Bearer <session>`. Runtime tool
+requests use `X-Agent-Principal-Token: <credential>`. The two identities are
+validated separately.
 
 ### AgentService
 
@@ -57,6 +65,8 @@ queued -> running -> waiting -> running -> completed
 
 ```text
 data/auth.db              Users, roles, sessions, permissions, Agents, runs, messages, auth audits
+                          credentials, capabilities, approvals, mock resources,
+                          orchestration jobs/runs/messages, and audit links
 data/launchpad.json       Legacy import source used only when the SQLite database is empty
 workspaces/AgentID/       Agent-created files
 workspaces/.deleted/      Archived deleted workspaces
@@ -71,8 +81,9 @@ exist; SQLite is then the source of truth.
 
 `AuthStore` uses Node's built-in SQLite support for the authentication
 migration. It stores only password hashes and session-token hashes. In
-development it applies the deterministic Alice/Bob seed; production does not
-auto-seed demo users.
+development it applies the deterministic Alice/Bob seed and the mock policy
+records; production does not auto-seed demo users. `AgentPolicyGateway` keeps
+capability, approval, and action-log rules out of the HTTP handlers.
 
 ### Runtime providers
 
@@ -96,7 +107,7 @@ the stored Codex thread, and escalate termination after a grace period.
 | Track | Primary seam | Expected change |
 | --- | --- | --- |
 | Glass Box | `AgentRunner`, `AgentRun` | Emit and display correlated execution events. |
-| Bouncer | API routes, Agent identity | Human identity, object-level ownership, and independent per-Agent principals. |
+| Bouncer | `AuthStore`, `AgentPolicyGateway`, API routes | Human identity, object-level ownership, independent per-Agent principals, scoped capabilities, approvals, and revocation. |
 | Kill Switch | `AgentRunner` | Add threat-specific policy or a stronger sandbox. |
 
 The current container or ECS instance is the POC trust boundary. Ordinary

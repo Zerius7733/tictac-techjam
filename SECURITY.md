@@ -11,7 +11,11 @@ credentials, personal data, or exploit details in an issue.
 
 ## Known limitations
 
-- Shared demo token; no user identity, authorization, RBAC, or tenant isolation
+- Demo credentials and a shared application token; identity, RBAC, and
+  ownership checks are implemented for the hackathon flow, but this is not a
+  production identity provider
+- Agent credentials are short-lived and revocable, but they are intended for
+  the local demonstration and should not be treated as a full secrets system
 - No CSRF protection
 - No per-Agent container boundary in ECS mode
 - Ordinary local containers, not hardened multi-tenant sandboxes

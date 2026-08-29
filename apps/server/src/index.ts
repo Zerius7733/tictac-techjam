@@ -4,6 +4,8 @@ import { createApp } from "./app.js";
 import { AuthStore } from "./auth-store.js";
 import { AuthStoreAuthorizer } from "./auth-authorizer.js";
 import { loadConfig, writeCodexConfig } from "./config.js";
+import { AgentPolicyGateway } from "./agent-policy-gateway.js";
+import { PolicyStore } from "./policy-store.js";
 import { createRunner } from "./runner-factory.js";
 import {
   AgentStoreDirectory,
@@ -20,6 +22,8 @@ await writeCodexConfig(config);
 
 const authStore = new AuthStore(config.authDatabasePath);
 await authStore.initialize(config.nodeEnv !== "production");
+const policyStore = new PolicyStore(config.authDatabasePath);
+await policyStore.initialize(config.nodeEnv !== "production");
 
 const legacyStore = new JsonStore(path.join(config.dataDirectory, "launchpad.json"));
 await legacyStore.initialize();
@@ -31,7 +35,8 @@ await orchestrationRepository.initialize();
 await orchestrationRepository.reconcileAfterRestart();
 const workspaces = new WorkspaceManager(config.workspaceRoot);
 const runner = createRunner(config);
-const service = new AgentService(config, store, workspaces, runner, authStore);
+const policyGateway = new AgentPolicyGateway(authStore, policyStore);
+const service = new AgentService(config, store, workspaces, runner, authStore, policyGateway);
 await service.initialize();
 
 const agentDirectory = new AgentStoreDirectory(store);
@@ -43,12 +48,18 @@ const dispatcher = new OrchestrationDispatcher(
   runner,
   { resourceProvider: new AllowlistedResourceProvider() },
 );
-const app = await createApp(config, service, authStore, {
-  repository: orchestrationRepository,
-  dispatcher,
-  agents: agentDirectory,
-  authorizer,
-});
+const app = await createApp(
+  config,
+  service,
+  authStore,
+  {
+    repository: orchestrationRepository,
+    dispatcher,
+    agents: agentDirectory,
+    authorizer,
+  },
+  policyGateway,
+);
 
 const shutdown = async (signal: string) => {
   app.log.info({ signal }, "Shutting down");
@@ -57,6 +68,7 @@ const shutdown = async (signal: string) => {
   } finally {
     store.close();
     orchestrationRepository.close();
+    policyStore.close();
     authStore.close();
   }
   process.exit(0);

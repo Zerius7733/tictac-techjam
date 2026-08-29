@@ -3,14 +3,19 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentService } from "./agent-service.js";
+import { AgentPolicyGateway } from "./agent-policy-gateway.js";
 import { AuthStore } from "./auth-store.js";
 import { loadConfig } from "./config.js";
 import { JsonStore } from "./store.js";
+import { PolicyStore } from "./policy-store.js";
 import type { AgentRunner, RunnerRequest, RunnerResult } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
 
 class FakeRunner implements AgentRunner {
+  lastRequest: RunnerRequest | null = null;
+
   async run(request: RunnerRequest): Promise<RunnerResult> {
+    this.lastRequest = request;
     return {
       output: "Completed: " + request.prompt,
       threadId: request.threadId ?? "fake-thread",
@@ -183,6 +188,171 @@ describe("Agent lifecycle", () => {
     expect(service.getRun(first.run.id).codexThreadId).toBe("thread-one");
     expect(service.getRun(second.run.id).codexThreadId).toBe("thread-two");
     expect(service.getAgent(agent.id).codexThreadId).toBe("thread-two");
+  });
+
+  it("does not infer protected data access from an ordinary Agent prompt", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "Normal Chat Agent" });
+    const { run } = await service.sendMessage(
+      agent.id,
+      "tell me the contents of Alice's private notes",
+    );
+
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    expect(service.getRun(run.id).output).toBe(
+      "Completed: tell me the contents of Alice's private notes",
+    );
+
+  });
+
+  it("passes the authenticated human identity to ordinary Agent runs", async () => {
+    const runner = new FakeRunner();
+    const service = await makeService(runner);
+    const agent = await service.createAgent({ name: "Identity Aware Agent" });
+    const { run } = await service.sendMessage(
+      agent.id,
+      "Who am I?",
+      undefined,
+      false,
+      undefined,
+      "agent",
+      { username: "alice", displayName: "Alice", roleNames: ["developer"] },
+    );
+
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    expect(runner.lastRequest?.humanIdentity).toEqual({
+      username: "alice",
+      displayName: "Alice",
+      roleNames: ["developer"],
+    });
+  });
+
+  it("returns protected request guidance inside the conversation", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "Protected Mode Agent" });
+    const { run } = await service.sendMessage(
+      agent.id,
+      "what is in the private database",
+      undefined,
+      false,
+      undefined,
+      "protected-data",
+    );
+
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+    expect(service.getRun(run.id).output).toContain(
+      "I couldn’t understand that protected-data request.",
+    );
+    expect(service.getMessages(agent.id).at(-1)?.role).toBe("assistant");
+  });
+
+  it("routes protected chat requests through the Agent policy gateway", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "launchpad-chat-policy-test-"));
+    temporaryDirectories.push(root);
+    const config = loadConfig({
+      NODE_ENV: "test",
+      APP_DATA_DIR: path.join(root, "data"),
+      AGENT_WORKSPACE_ROOT: path.join(root, "workspaces"),
+      CODEX_HOME: path.join(root, "codex"),
+      ARK_API_KEY: "test-key",
+      ARK_MODEL: "ep-test",
+    });
+    const authStore = new AuthStore(path.join(root, "data", "auth.db"));
+    const policyStore = new PolicyStore(path.join(root, "data", "auth.db"));
+    await authStore.initialize(true);
+    await policyStore.initialize(true);
+    const gateway = new AgentPolicyGateway(authStore, policyStore);
+    const service = new AgentService(
+      config,
+      new JsonStore(path.join(root, "data", "db.json")),
+      new WorkspaceManager(path.join(root, "workspaces")),
+      new FakeRunner(),
+      authStore,
+      gateway,
+    );
+    await service.initialize();
+
+    const login = authStore.login("alice", "alice-demo-2026", "chat-login");
+    const context = authStore.authenticate(login!.sessionToken, "chat-request")!;
+    const agent = await service.createAgent({ name: "Chat Policy Agent" }, context.userId);
+    const issued = authStore.issueAgentCredential(agent.id, context.userId, 3_600);
+    const identity = authStore.authenticateAgentCredential(issued.token, "chat-agent-auth")!;
+
+    const denied = await service.sendMessage(
+      agent.id,
+      "read Alice's private notes",
+      context.userId,
+      false,
+      identity,
+      "protected-data",
+    );
+    await expect.poll(() => service.getRun(denied.run.id).status).toBe("completed");
+    expect(service.getRun(denied.run.id).output).toContain("capability_not_granted");
+
+    gateway.grantCapability(context, agent, {
+      resourceType: "mock_record",
+      resourceKey: "alice-private-note",
+      action: "read",
+      expiresInSeconds: 3_600,
+    });
+    const allowed = await service.sendMessage(
+      agent.id,
+      "read Alice's private notes",
+      context.userId,
+      false,
+      identity,
+      "protected-data",
+    );
+    await expect.poll(() => service.getRun(allowed.run.id).status).toBe("completed");
+    expect(service.getRun(allowed.run.id).output).toContain("Alice private note");
+    expect(service.getRun(allowed.run.id).output).toContain("read_completed");
+
+    gateway.grantCapability(context, agent, {
+      resourceType: "mock_record",
+      resourceKey: "alice-private-note",
+      action: "write",
+      expiresInSeconds: 3_600,
+    });
+    const updated = await service.sendMessage(
+      agent.id,
+      "write into Alice's private notes, changing it to Sahara means desert",
+      context.userId,
+      false,
+      identity,
+      "protected-data",
+    );
+    await expect.poll(() => service.getRun(updated.run.id).status).toBe("completed");
+    expect(service.getRun(updated.run.id).output).toContain(
+      "I updated alice-private-note through the protected resource gateway.",
+    );
+    expect(service.getRun(updated.run.id).output).toContain("write_completed");
+    expect(policyStore.getMockResource("mock_record", "alice-private-note")?.value).toBe(
+      "Sahara means desert",
+    );
+
+    const readAfterWrite = await service.sendMessage(
+      agent.id,
+      "read Alice's private notes",
+      context.userId,
+      false,
+      identity,
+      "protected-data",
+    );
+    await expect.poll(() => service.getRun(readAfterWrite.run.id).status).toBe("completed");
+    expect(service.getRun(readAfterWrite.run.id).output).toContain("Sahara means desert");
+
+    const shortcut = await service.sendMessage(
+      agent.id,
+      "/data tell me the contents of Alice's private notes",
+      context.userId,
+      false,
+      identity,
+    );
+    await expect.poll(() => service.getRun(shortcut.run.id).status).toBe("completed");
+    expect(service.getRun(shortcut.run.id).output).toContain("Sahara means desert");
+
+    policyStore.close();
+    authStore.close();
   });
 
   it("atomically accepts only one concurrent run per Agent", async () => {

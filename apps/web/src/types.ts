@@ -6,6 +6,8 @@ export type RunStatus =
   | "completed"
   | "failed"
   | "cancelled";
+export type PolicyAction = "read" | "write";
+export type ChatMode = "agent" | "protected-data";
 
 export interface Agent {
   id: string;
@@ -34,6 +36,7 @@ export interface Message {
 export interface AgentRun {
   id: string;
   agentId: string;
+  codexThreadId: string | null;
   status: RunStatus;
   prompt: string;
   output: string | null;
@@ -43,6 +46,8 @@ export interface AgentRun {
     cachedInputTokens?: number;
     outputTokens?: number;
   } | null;
+  startedAt: string | null;
+  completedAt: string | null;
   createdAt: string;
 }
 
@@ -116,4 +121,88 @@ export interface OrchestrationMessage {
   content: string;
   payload: Record<string, unknown>;
   createdAt: string;
+}
+
+export interface MockResource {
+  id: string;
+  resourceType: string;
+  resourceKey: string;
+  ownerUserId: string | null;
+  sensitivity: "private" | "shared";
+  value: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AgentCapability {
+  id: string;
+  agentPrincipalId: string;
+  resourceType: string;
+  resourceKey: string;
+  action: PolicyAction;
+  grantedByUserId: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export type ApprovalStatus =
+  | "pending"
+  | "approved"
+  | "denied"
+  | "expired"
+  | "consumed";
+
+export interface AgentApproval {
+  id: string;
+  agentPrincipalId: string;
+  requestedByUserId: string;
+  action: PolicyAction;
+  resourceType: string;
+  resourceKey: string;
+  inputText: string;
+  status: ApprovalStatus;
+  expiresAt: string;
+  decidedByUserId: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+}
+
+export interface AgentCredential {
+  id: string;
+  agentPrincipalId: string;
+  agentId: string;
+  issuedByUserId: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export interface AgentActionLog {
+  id: string;
+  auditLogId: string;
+  agentPrincipalId: string;
+  capabilityId: string | null;
+  approvalId: string | null;
+  action: PolicyAction;
+  resourceType: string;
+  resourceKey: string;
+  decision: "allow" | "deny";
+  resultCode: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface AgentPolicyResult {
+  status: "allowed" | "denied" | "approval_required";
+  allowed: boolean;
+  reasonCode: string;
+  actionLogId?: string;
+  resource?: {
+    resourceType: string;
+    resourceKey: string;
+    value?: string;
+    updated?: boolean;
+  };
+  approval?: AgentApproval;
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { AgentStore } from "./agent-store.js";
-import type { AuthStore } from "./auth-store.js";
+import type { AgentRuntimeIdentity, AuthStore } from "./auth-store.js";
+import { AgentPolicyGateway } from "./agent-policy-gateway.js";
 import type { AppConfig } from "./config.js";
 import { isArkConfigured } from "./config.js";
 import { HttpError, RunCancelledError } from "./errors.js";
@@ -9,10 +10,16 @@ import type {
   AgentRun,
   AgentRunner,
   CreateAgentInput,
+  HumanIdentity,
   Message,
   UpdateAgentInput,
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
+import {
+  type ChatMode,
+  type ProtectedResourceIntent,
+  parseProtectedResourceIntent,
+} from "./protected-resource-intent.js";
 
 const now = () => new Date().toISOString();
 
@@ -26,6 +33,7 @@ export class AgentService {
     private readonly workspaces: WorkspaceManager,
     private readonly runner: AgentRunner,
     private readonly authStore?: AuthStore,
+    private readonly policyGateway?: AgentPolicyGateway,
   ) {}
 
   async initialize(): Promise<void> {
@@ -205,9 +213,24 @@ export class AgentService {
     prompt: string,
     ownerUserId?: string,
     includeAll = false,
+    agentIdentity?: AgentRuntimeIdentity,
+    mode: ChatMode = "agent",
+    humanIdentity?: HumanIdentity,
   ): Promise<{ run: AgentRun; message: Message }> {
     this.getAgent(agentId, ownerUserId, includeAll);
-    if (!isArkConfigured(this.config)) {
+    const commandRequested = /^\s*\/data\b/i.test(prompt);
+    const policyPrompt = commandRequested
+      ? prompt.replace(/^\s*\/data\s*/i, "").trim()
+      : prompt;
+    const protectedMode = mode === "protected-data" || commandRequested;
+    const protectedIntent = protectedMode
+      ? parseProtectedResourceIntent(policyPrompt)
+      : null;
+    const protectedRequestError =
+      protectedMode && !protectedIntent
+        ? "I couldn’t understand that protected-data request. Try ‘read Alice’s private notes’, ‘read Bob’s private notes’, or ‘read shared-status’. For a write, include the new value, for example ‘write Alice’s private note: …’."
+        : null;
+    if (!protectedIntent && !protectedRequestError && !isArkConfigured(this.config)) {
       throw new HttpError(
         503,
         "Ark is not configured. Set ARK_API_KEY and ARK_MODEL, then restart.",
@@ -258,7 +281,14 @@ export class AgentService {
       storedAgent.updatedAt = timestamp;
       return snapshot;
     });
-    const execution = this.executeRun(agentAtStart, run);
+    const execution = this.executeRun(
+      agentAtStart,
+      run,
+      agentIdentity,
+      protectedIntent,
+      protectedRequestError,
+      humanIdentity,
+    );
     this.activeExecutions.set(agentId, execution);
     void execution
       .finally(() => {
@@ -289,7 +319,14 @@ export class AgentService {
     };
   }
 
-  private async executeRun(agentAtStart: Agent, run: AgentRun): Promise<void> {
+  private async executeRun(
+    agentAtStart: Agent,
+    run: AgentRun,
+    agentIdentity?: AgentRuntimeIdentity,
+    protectedIntent: ProtectedResourceIntent | null = null,
+    protectedRequestError: string | null = null,
+    humanIdentity?: HumanIdentity,
+  ): Promise<void> {
     await this.store.mutate((database) => {
       const storedRun = database.runs.find((item) => item.id === run.id);
       if (storedRun) {
@@ -301,15 +338,29 @@ export class AgentService {
       if (this.cancellationRequests.has(agentAtStart.id)) {
         throw new RunCancelledError();
       }
-      const result = await this.runner.run({
-        agentId: agentAtStart.id,
-        workspacePath: agentAtStart.workspacePath,
-        prompt: run.prompt,
-        // A run owns its Codex context. The Agent-level field is only a
-        // compatibility mirror for the legacy single-Agent UI.
-        threadId: run.codexThreadId,
-        runId: run.id,
-      });
+      const result = protectedRequestError
+        ? {
+            output: protectedRequestError,
+            threadId: run.codexThreadId,
+            usage: null,
+          }
+        : protectedIntent
+          ? this.runProtectedResourceRequest(
+              agentAtStart,
+              protectedIntent,
+              agentIdentity,
+              run.codexThreadId,
+            )
+          : await this.runner.run({
+              agentId: agentAtStart.id,
+              workspacePath: agentAtStart.workspacePath,
+              prompt: run.prompt,
+              // A run owns its Codex context. The Agent-level field is only a
+              // compatibility mirror for the legacy single-Agent UI.
+              threadId: run.codexThreadId,
+              runId: run.id,
+              ...(humanIdentity ? { humanIdentity } : {}),
+            });
       const completedAt = now();
       await this.store.mutate((database) => {
         const storedRun = database.runs.find((item) => item.id === run.id);
@@ -355,6 +406,59 @@ export class AgentService {
         }
       });
     }
+  }
+
+  private runProtectedResourceRequest(
+    agent: Agent,
+    intent: ProtectedResourceIntent,
+    identity?: AgentRuntimeIdentity,
+    threadId: string | null = null,
+  ) {
+    if (!identity) {
+      return {
+        output:
+          "I couldn’t access that protected record because this conversation did not provide the Agent’s credential. Issue an Agent credential, then try again.",
+        threadId,
+        usage: null,
+      };
+    }
+    if (!this.policyGateway) {
+      throw new HttpError(503, "Agent policy is not configured");
+    }
+
+    const decision = this.policyGateway.executeAsAgent(identity, agent, intent);
+    if (decision.status === "allowed") {
+      const isRead = intent.action === "read";
+      return {
+        output: [
+          isRead
+            ? `I accessed ${decision.resource.resourceKey} through the protected resource gateway.`
+            : `I updated ${decision.resource.resourceKey} through the protected resource gateway.`,
+          ...(isRead ? ["", decision.resource.value ?? "", ""] : [""]),
+          `Policy decision: ${decision.reasonCode}`,
+        ].join("\n"),
+        threadId,
+        usage: null,
+      };
+    }
+
+    const verb = intent.action === "read" ? "access" : "update";
+    const requirement =
+      decision.reasonCode === "write_input_required"
+        ? "Include the new note text in the write request."
+        : decision.status === "approval_required"
+          ? "Open Security & Policy to review the pending human approval."
+          : "The Agent needs an active capability for this exact resource and action.";
+    return {
+      output: [
+        `I couldn’t ${verb} ${intent.resourceKey}. The backend policy gateway denied the Agent request.`,
+        "",
+        `Policy decision: ${decision.reasonCode}`,
+        requirement,
+      ].join("\n"),
+      threadId,
+      usage: null,
+    };
   }
 
   private async setStatus(

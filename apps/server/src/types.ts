@@ -81,6 +81,12 @@ export interface RunnerResult {
   usage: RunUsage | null;
 }
 
+export interface HumanIdentity {
+  username: string;
+  displayName: string | null;
+  roleNames: string[];
+}
+
 export interface RunnerRequest {
   agentId: string;
   workspacePath: string;
@@ -90,6 +96,7 @@ export interface RunnerRequest {
   requestId?: string;
   jobId?: string;
   runId?: string;
+  humanIdentity?: HumanIdentity;
 }
 
 export interface AgentRunner {

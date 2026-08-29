@@ -7,7 +7,19 @@ import {
   setSessionToken,
 } from "./api";
 import { OrchestrationPanel } from "./OrchestrationPanel";
-import type { Agent, AgentRun, Message, SystemInfo } from "./types";
+import type {
+  Agent,
+  AgentActionLog,
+  AgentApproval,
+  AgentCapability,
+  AgentCredential,
+  AgentRun,
+  ChatMode,
+  Message,
+  MockResource,
+  PolicyAction,
+  SystemInfo,
+} from "./types";
 
 type AuthStage = "loading" | "app-token" | "login" | "authenticated";
 
@@ -51,16 +63,398 @@ function Spinner() {
   return <span className="spinner" aria-label="Loading" />;
 }
 
+type SecurityBusyAction =
+  | "loading"
+  | "credential"
+  | "capability"
+  | "revoke"
+  | null;
+
+interface SecurityPanelProps {
+  agent: Agent;
+  ownerName: string;
+  setupMode?: boolean;
+  initialAgentCredential: { id: string; token: string } | null;
+  onAgentCredentialChange: (credential: { id: string; token: string } | null) => void;
+  onClose: () => void;
+}
+
+function formatPolicyTime(value: string): string {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function SecurityPanel({
+  agent,
+  ownerName,
+  setupMode = false,
+  initialAgentCredential,
+  onAgentCredentialChange,
+  onClose,
+}: SecurityPanelProps) {
+  const [resources, setResources] = useState<MockResource[]>([]);
+  const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
+  const [credentials, setCredentials] = useState<AgentCredential[]>([]);
+  const [approvals, setApprovals] = useState<AgentApproval[]>([]);
+  const [actionLogs, setActionLogs] = useState<AgentActionLog[]>([]);
+  const [resourceKey, setResourceKey] = useState("");
+  const [action, setAction] = useState<PolicyAction>("read");
+  const [agentToken, setAgentToken] = useState(initialAgentCredential?.token ?? "");
+  const [credentialId, setCredentialId] = useState<string | null>(
+    initialAgentCredential?.id ?? null,
+  );
+  const [busyAction, setBusyAction] = useState<SecurityBusyAction>("loading");
+  const [panelError, setPanelError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    const [resourceResult, capabilityResult, credentialResult, approvalResult, logResult] =
+      await Promise.all([
+        api.listResources(),
+        api.listCapabilities(agent.id),
+        api.listCredentials(agent.id),
+        api.listApprovals(agent.id),
+        api.listActionLogs(agent.id),
+      ]);
+    setResources(resourceResult.resources);
+    setCapabilities(capabilityResult.capabilities);
+    setCredentials(credentialResult.credentials);
+    setApprovals(approvalResult.approvals);
+    setActionLogs(logResult.actions);
+    setResourceKey((current) =>
+      current && resourceResult.resources.some((resource) => resource.resourceKey === current)
+        ? current
+        : (resourceResult.resources[0]?.resourceKey ?? ""),
+    );
+  }, [agent.id]);
+
+  useEffect(() => {
+    void refresh()
+      .catch((reason) =>
+        setPanelError(reason instanceof Error ? reason.message : String(reason)),
+      )
+      .finally(() => setBusyAction(null));
+  }, [refresh]);
+
+  const selectedResource = resources.find((resource) => resource.resourceKey === resourceKey);
+  const activeCapabilities = capabilities.filter(
+    (capability) =>
+      !capability.revokedAt && new Date(capability.expiresAt).getTime() > Date.now(),
+  );
+  const pendingApprovals = approvals.filter((approval) => approval.status === "pending");
+
+  const runWithRefresh = async (work: () => Promise<void>, busy: SecurityBusyAction) => {
+    setBusyAction(busy);
+    setPanelError(null);
+    setNotice(null);
+    try {
+      await work();
+      await refresh();
+    } catch (reason) {
+      setPanelError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const issueCredential = async () => {
+    await runWithRefresh(async () => {
+      const result = await api.issueCredential(agent.id, 3_600);
+      setAgentToken(result.credential.token);
+      setCredentialId(result.credential.id);
+      onAgentCredentialChange({
+        id: result.credential.id,
+        token: result.credential.token,
+      });
+      setNotice("Credential issued. Copy it now—the raw token will not be shown again.");
+    }, "credential");
+  };
+
+  const grantCapability = async () => {
+    if (!selectedResource) return;
+    await runWithRefresh(async () => {
+      await api.grantCapability(agent.id, {
+        resourceType: selectedResource.resourceType,
+        resourceKey: selectedResource.resourceKey,
+        action,
+        expiresInSeconds: 3_600,
+      });
+      setNotice(
+        `${action === "read" ? "Read" : "Write"} access granted for ${selectedResource.resourceKey}.`,
+      );
+    }, "capability");
+  };
+
+  const revokeCapability = async (capabilityId: string) => {
+    await runWithRefresh(async () => {
+      await api.revokeCapability(agent.id, capabilityId);
+      setNotice("Capability revoked. The next matching Agent request will be denied.");
+    }, "revoke");
+  };
+
+  const revokeCredential = async (id: string) => {
+    await runWithRefresh(async () => {
+      await api.revokeCredential(agent.id, id);
+      if (id === credentialId) {
+        setAgentToken("");
+        setCredentialId(null);
+        onAgentCredentialChange(null);
+      }
+      setNotice("Credential revoked. Requests using it will now return unauthorized.");
+    }, "revoke");
+  };
+
+  const clearToken = () => {
+    setAgentToken("");
+    setCredentialId(null);
+    onAgentCredentialChange(null);
+    setNotice("The raw credential was cleared from this browser tab.");
+  };
+
+  return (
+    <div className="modal-backdrop security-backdrop" onMouseDown={onClose}>
+      <section
+        className="security-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="security-panel-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="security-heading">
+          <div>
+            <span className="eyebrow">{setupMode ? "Step 2 of 2" : "Security & Policy"}</span>
+            <h2 id="security-panel-title">
+              {setupMode ? "Choose what this Agent may access" : "Agent identity and permissions"}
+            </h2>
+            <p>
+              {setupMode
+                ? "Start with the smallest access needed. You can change this later."
+                : "Alice’s permissions do not automatically become the Agent’s permissions."}
+            </p>
+          </div>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close security panel">
+            ×
+          </button>
+        </div>
+
+        {panelError && <div className="security-alert security-alert-error" role="alert">{panelError}</div>}
+        {notice && <div className="security-alert security-alert-success" role="status">{notice}</div>}
+
+        <div className="security-identity-grid">
+          <div className="security-identity-card">
+            <span className="eyebrow">Human owner</span>
+            <strong>{ownerName}</strong>
+            <code>{agent.ownerUserId ?? "not assigned"}</code>
+          </div>
+          <div className="security-identity-card">
+            <span className="eyebrow">Independent Agent principal</span>
+            <strong>{agent.name}</strong>
+            <code>{agent.principalId ?? "not assigned"}</code>
+          </div>
+        </div>
+
+        <div className="security-grid">
+          <section className="security-card security-access-card">
+            <div className="security-card-heading">
+              <div>
+                <span className="eyebrow">1 · Agent credential</span>
+                <h3>Give the Agent its own key</h3>
+              </div>
+              <span className="security-count">{credentials.length}</span>
+            </div>
+            <p className="security-copy">
+              This credential is separate from Alice’s login session and is stored as a hash by the backend.
+            </p>
+            <button
+              className="button button-primary"
+              onClick={() => void issueCredential()}
+              disabled={busyAction !== null}
+            >
+              {busyAction === "credential" ? <Spinner /> : "Issue Agent credential"}
+            </button>
+            {agentToken && (
+              <div className="credential-reveal">
+                <span className="eyebrow">Shown once · keep it for this test</span>
+                <code>{agentToken}</code>
+                <button className="button button-ghost" onClick={clearToken}>Forget token</button>
+              </div>
+            )}
+            {credentials.length > 0 && (
+              <div className="security-list compact-list">
+                {credentials.map((credential) => (
+                  <div className="security-list-row" key={credential.id}>
+                    <div>
+                      <strong>{credential.id === credentialId ? "Current browser credential" : "Issued credential"}</strong>
+                      <span>{credential.revokedAt ? "Revoked" : `Expires ${formatPolicyTime(credential.expiresAt)}`}</span>
+                    </div>
+                    {!credential.revokedAt && (
+                      <button
+                        className="button button-danger button-small"
+                        onClick={() => void revokeCredential(credential.id)}
+                        disabled={busyAction !== null}
+                      >
+                        Revoke
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="security-card security-access-card">
+            <div className="security-card-heading">
+              <div>
+                <span className="eyebrow">2 · Delegated capability</span>
+                <h3>Choose the smallest access</h3>
+              </div>
+              <span className="security-count">{activeCapabilities.length} active</span>
+            </div>
+            <p className="security-copy">
+              A capability is exact: one Agent, one resource, and one action. A write capability lets the Agent update that resource.
+            </p>
+            <label>
+              Protected resource
+              <select value={resourceKey} onChange={(event) => setResourceKey(event.target.value)}>
+                {resources.map((resource) => (
+                  <option key={resource.resourceKey} value={resource.resourceKey}>
+                    {resource.resourceKey} · {resource.sensitivity}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="action-choice" role="group" aria-label="Capability action">
+              {(["read", "write"] as PolicyAction[]).map((option) => (
+                <button
+                  type="button"
+                  key={option}
+                  className={"choice-button " + (action === option ? "selected" : "")}
+                  onClick={() => setAction(option)}
+                >
+                  {option === "read" ? "Read" : "Write"}
+                </button>
+              ))}
+            </div>
+            <button
+              className="button button-primary"
+              onClick={() => void grantCapability()}
+              disabled={busyAction !== null || !selectedResource}
+            >
+              {busyAction === "capability" ? <Spinner /> : `Grant ${action} capability`}
+            </button>
+            <div className="security-list">
+              {capabilities.length === 0 ? (
+                <div className="security-empty">No capabilities yet. This Agent currently has no resource access.</div>
+              ) : (
+                capabilities.map((capability) => (
+                  <div className="security-list-row" key={capability.id}>
+                    <div>
+                      <strong>{capability.action} · {capability.resourceKey}</strong>
+                      <span>
+                        {capability.revokedAt
+                          ? "Revoked"
+                          : `Expires ${formatPolicyTime(capability.expiresAt)}`}
+                      </span>
+                    </div>
+                    {!capability.revokedAt && (
+                      <button
+                        className="button button-danger button-small"
+                        onClick={() => void revokeCapability(capability.id)}
+                        disabled={busyAction !== null}
+                      >
+                        Revoke
+                      </button>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
+
+        <div className="security-grid">
+          <section className="security-card">
+            <div className="security-card-heading">
+              <div>
+                <span className="eyebrow">Approval history</span>
+                <h3>Human decisions</h3>
+              </div>
+              <span className="security-count">{pendingApprovals.length} pending</span>
+            </div>
+            <div className="security-list compact-list">
+              {approvals.length === 0 ? (
+                <div className="security-empty">No approval requests yet.</div>
+              ) : (
+                approvals.slice(0, 4).map((approval) => (
+                  <div className="security-list-row" key={approval.id}>
+                    <div>
+                      <strong>{approval.status} · {approval.resourceKey}</strong>
+                      <span>{approval.inputText || "No proposed value"}</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+          <section className="security-card">
+            <div className="security-card-heading">
+              <div>
+                <span className="eyebrow">Audit proof</span>
+                <h3>Recent Agent actions</h3>
+              </div>
+              <span className="security-count">{actionLogs.length}</span>
+            </div>
+            <div className="security-list compact-list">
+              {actionLogs.length === 0 ? (
+                <div className="security-empty">No Agent actions yet.</div>
+              ) : (
+                actionLogs.slice(0, 4).map((log) => (
+                  <div className="security-list-row" key={log.id}>
+                    <div>
+                      <strong className={log.decision === "allow" ? "text-success" : "text-danger"}>
+                        {log.decision} · {log.action}
+                      </strong>
+                      <span>{log.resourceKey} · {log.resultCode}</span>
+                    </div>
+                    <time>{formatPolicyTime(log.createdAt)}</time>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        </div>
+
+        <div className="security-footer">
+          <span>Permissions are enforced by the backend and recorded in the database.</span>
+          <button className="button button-ghost" onClick={onClose}>
+            {setupMode ? "Finish later" : "Close"}
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function App() {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [agentCredentials, setAgentCredentials] = useState<
+    Record<string, { id: string; token: string }>
+  >({});
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showOrchestration, setShowOrchestration] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showSecurity, setShowSecurity] = useState(false);
+  const [securitySetup, setSecuritySetup] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [prompt, setPrompt] = useState("");
+  const [chatMode, setChatMode] = useState<ChatMode>("agent");
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +473,18 @@ export default function App() {
   const selected = useMemo(
     () => agents.find((agent) => agent.id === selectedId) ?? null,
     [agents, selectedId],
+  );
+
+  const rememberAgentCredential = useCallback(
+    (agentId: string, credential: { id: string; token: string } | null) => {
+      setAgentCredentials((current) => {
+        const next = { ...current };
+        if (credential) next[agentId] = credential;
+        else delete next[agentId];
+        return next;
+      });
+    },
+    [],
   );
 
   const refreshAgents = useCallback(async () => {
@@ -131,6 +537,7 @@ export default function App() {
   useEffect(() => {
     setActiveRun(null);
     setShowSettings(false);
+    setChatMode("agent");
     if (!selectedId) {
       setMessages([]);
       return;
@@ -175,6 +582,8 @@ export default function App() {
       setSelectedId(agent.id);
       setShowOrchestration(false);
       setShowCreate(false);
+      setSecuritySetup(true);
+      setShowSecurity(true);
       setForm(emptyForm);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -192,6 +601,8 @@ export default function App() {
       await api.updateAgent(selected.id, form);
       await refreshAgents();
       setShowSettings(false);
+      setShowSecurity(false);
+      setSecuritySetup(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -257,10 +668,21 @@ export default function App() {
     event.preventDefault();
     if (!selected || !prompt.trim()) return;
     const content = prompt.trim();
+    if (/^\/data\s*$/i.test(content)) {
+      setChatMode("protected-data");
+      setPrompt("");
+      setError(null);
+      return;
+    }
     setPrompt("");
     setError(null);
     try {
-      const result = await api.sendMessage(selected.id, content);
+      const result = await api.sendMessage(
+        selected.id,
+        content,
+        agentCredentials[selected.id]?.token ?? "",
+        chatMode,
+      );
       if (selectedIdRef.current === selected.id) {
         setMessages((current) => [...current, result.message]);
         setActiveRun(result.run);
@@ -335,10 +757,13 @@ export default function App() {
       setAppAuthToken("");
       setCurrentUser(null);
       setAgents([]);
+      setAgentCredentials({});
       setMessages([]);
       setSelectedId(null);
       setActiveRun(null);
       setSystem(null);
+      setShowSecurity(false);
+      setSecuritySetup(false);
       setAuthStage(sharedTokenRequired ? "app-token" : "login");
       setBusy(false);
     }
@@ -555,6 +980,16 @@ export default function App() {
                   Settings
                 </button>
                 <button
+                  className="button button-policy"
+                  onClick={() => {
+                    setSecuritySetup(false);
+                    setShowSecurity(true);
+                  }}
+                  disabled={busy || selected.status === "busy"}
+                >
+                  Security & Policy
+                </button>
+                <button
                   className="button button-ghost"
                   onClick={toggleAgent}
                   disabled={busy}
@@ -686,6 +1121,32 @@ export default function App() {
               </div>
 
               <form className="composer" onSubmit={sendMessage}>
+                <div className="composer-modebar" role="group" aria-label="Chat mode">
+                  <span className="composer-mode-label">Use chat for</span>
+                  <div className="composer-mode-options">
+                    <button
+                      type="button"
+                      className={"composer-mode-button " + (chatMode === "agent" ? "active" : "")}
+                      aria-pressed={chatMode === "agent"}
+                      onClick={() => setChatMode("agent")}
+                    >
+                      Agent tasks
+                    </button>
+                    <button
+                      type="button"
+                      className={"composer-mode-button " + (chatMode === "protected-data" ? "active" : "")}
+                      aria-pressed={chatMode === "protected-data"}
+                      onClick={() => setChatMode("protected-data")}
+                    >
+                      Protected data
+                    </button>
+                  </div>
+                  <span className="composer-mode-help">
+                    {chatMode === "protected-data"
+                      ? "Credential + exact capability required"
+                      : "Use /data as a shortcut · type it alone to switch"}
+                  </span>
+                </div>
                 <textarea
                   value={prompt}
                   onChange={(event) => setPrompt(event.target.value)}
@@ -698,7 +1159,9 @@ export default function App() {
                   placeholder={
                     selected.status === "stopped"
                       ? "Start this Agent to continue…"
-                      : "Describe what you want the Agent to do…"
+                      : chatMode === "protected-data"
+                        ? "Ask about a protected record, e.g. read Alice’s private notes…"
+                        : "Describe what you want the Agent to do…"
                   }
                   disabled={
                     selected.status === "stopped" ||
@@ -710,6 +1173,11 @@ export default function App() {
                 <div className="composer-footer">
                   <span>
                     Enter to send · Shift + Enter for newline · {system?.codexSandboxMode ?? "checking sandbox"}
+                    {chatMode === "protected-data"
+                      ? agentCredentials[selected.id]
+                        ? " · Protected data mode · credential active"
+                        : " · Protected data mode · issue an Agent credential"
+                      : " · Normal Agent mode"}
                   </span>
                   <button
                     className="send-button"
@@ -808,6 +1276,22 @@ export default function App() {
             </div>
           </form>
         </div>
+      )}
+
+      {showSecurity && selected && (
+        <SecurityPanel
+          agent={selected}
+          ownerName={currentUser?.displayName ?? currentUser?.username ?? "Current user"}
+          setupMode={securitySetup}
+          initialAgentCredential={agentCredentials[selected.id] ?? null}
+          onAgentCredentialChange={(credential) =>
+            rememberAgentCredential(selected.id, credential)
+          }
+          onClose={() => {
+            setShowSecurity(false);
+            setSecuritySetup(false);
+          }}
+        />
       )}
     </div>
   );

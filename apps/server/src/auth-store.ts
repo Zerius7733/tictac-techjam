@@ -25,6 +25,10 @@ const defaultAgentPrincipalMigrationPath = path.join(
   repositoryRoot,
   "db/migrations/003_agent_principals.sql",
 );
+const defaultAgentCredentialMigrationPath = path.join(
+  repositoryRoot,
+  "db/migrations/007_agent_credentials.sql",
+);
 
 export interface AuthUser {
   id: string;
@@ -48,9 +52,32 @@ export interface AgentPrincipal {
   revokedAt: string | null;
 }
 
+export interface AgentCredential {
+  id: string;
+  agentPrincipalId: string;
+  agentId: string;
+  issuedByUserId: string;
+  expiresAt: string;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export interface AgentCredentialIssue extends AgentCredential {
+  token: string;
+}
+
+export interface AgentRuntimeIdentity {
+  credentialId: string;
+  principalId: string;
+  agentId: string;
+  ownerUserId: string;
+  requestId: string;
+}
+
 declare module "fastify" {
   interface FastifyRequest {
     auth: AuthContext | null;
+    agentAuth: AgentRuntimeIdentity | null;
   }
 }
 
@@ -98,6 +125,17 @@ interface AgentPrincipalRow {
   revoked_at: string | null;
 }
 
+interface AgentCredentialRow {
+  id: string;
+  agent_principal_id: string;
+  agent_id: string;
+  owner_user_id: string;
+  issued_by_user_id: string;
+  expires_at: string;
+  revoked_at: string | null;
+  created_at: string;
+}
+
 interface AuditInput {
   requestId: string;
   userId: string | null;
@@ -117,6 +155,7 @@ export class AuthStore {
     private readonly migrationPath = defaultMigrationPath,
     private readonly seedPath = defaultSeedPath,
     private readonly agentPrincipalMigrationPath = defaultAgentPrincipalMigrationPath,
+    private readonly agentCredentialMigrationPath = defaultAgentCredentialMigrationPath,
   ) {}
 
   async initialize(seedDevelopment: boolean): Promise<void> {
@@ -125,6 +164,7 @@ export class AuthStore {
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     this.database.exec(await readFile(this.migrationPath, "utf8"));
     this.database.exec(await readFile(this.agentPrincipalMigrationPath, "utf8"));
+    this.database.exec(await readFile(this.agentCredentialMigrationPath, "utf8"));
     if (seedDevelopment) {
       this.database.exec(await readFile(this.seedPath, "utf8"));
     }
@@ -303,6 +343,163 @@ export class AuthStore {
     return this.getAgentPrincipal(agentId);
   }
 
+  issueAgentCredential(
+    agentId: string,
+    issuedByUserId: string,
+    expiresInSeconds: number,
+  ): AgentCredentialIssue {
+    const principal = this.getAgentPrincipal(agentId);
+    if (!principal || principal.status !== "active") {
+      throw new Error("Agent principal is inactive");
+    }
+    if (principal.ownerUserId !== issuedByUserId) {
+      throw new Error("Agent credential issuer does not own the Agent");
+    }
+
+    const id = randomUUID();
+    const token = "agt_" + randomBytes(32).toString("base64url");
+    const expiresAt = new Date(Date.now() + expiresInSeconds * 1000).toISOString();
+    this.db()
+      .prepare(
+        `INSERT INTO agent_principal_credentials
+           (id, agent_principal_id, token_hash, issued_by_user_id, expires_at)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(id, principal.id, hashToken(token), issuedByUserId, expiresAt);
+
+    const credential = this.getAgentCredential(id);
+    if (!credential) throw new Error("Agent credential was not created");
+    return { ...credential, token };
+  }
+
+  authenticateAgentCredential(
+    credentialToken: string,
+    requestId: string,
+  ): AgentRuntimeIdentity | null {
+    const token = credentialToken.trim();
+    if (!token) return null;
+    const row = this.db()
+      .prepare(
+        `SELECT
+           c.id,
+           c.agent_principal_id,
+           p.agent_id,
+           p.owner_user_id,
+           c.issued_by_user_id,
+           c.expires_at,
+           c.revoked_at,
+           c.created_at
+         FROM agent_principal_credentials c
+         JOIN agent_principals p ON p.id = c.agent_principal_id
+         JOIN users u ON u.id = p.owner_user_id
+         WHERE c.token_hash = ?
+           AND c.revoked_at IS NULL
+           AND c.expires_at > ?
+           AND p.status = 'active'
+           AND u.is_active = 1`,
+      )
+      .get(hashToken(token), new Date().toISOString()) as
+      | AgentCredentialRow
+      | undefined;
+
+    if (!row) return null;
+    this.insertAudit({
+      requestId,
+      userId: row.owner_user_id,
+      action: "agent_authenticate",
+      resourceType: "agent",
+      resourceKey: row.agent_id,
+      decision: "allow",
+      reasonCode: "agent_credential_valid",
+      metadata: { credentialId: row.id, agentPrincipalId: row.agent_principal_id },
+    });
+    return {
+      credentialId: row.id,
+      principalId: row.agent_principal_id,
+      agentId: row.agent_id,
+      ownerUserId: row.owner_user_id,
+      requestId,
+    };
+  }
+
+  listAgentCredentials(agentId: string): AgentCredential[] {
+    const rows = this.db()
+      .prepare(
+        `SELECT
+           c.id,
+           c.agent_principal_id,
+           p.agent_id,
+           p.owner_user_id,
+           c.issued_by_user_id,
+           c.expires_at,
+           c.revoked_at,
+           c.created_at
+         FROM agent_principal_credentials c
+         JOIN agent_principals p ON p.id = c.agent_principal_id
+         WHERE p.agent_id = ?
+         ORDER BY c.created_at DESC`,
+      )
+      .all(agentId) as unknown as AgentCredentialRow[];
+    return rows.map(toAgentCredential);
+  }
+
+  getAgentCredential(id: string): AgentCredential | null {
+    const row = this.db()
+      .prepare(
+        `SELECT
+           c.id,
+           c.agent_principal_id,
+           p.agent_id,
+           p.owner_user_id,
+           c.issued_by_user_id,
+           c.expires_at,
+           c.revoked_at,
+           c.created_at
+         FROM agent_principal_credentials c
+         JOIN agent_principals p ON p.id = c.agent_principal_id
+         WHERE c.id = ?`,
+      )
+      .get(id) as AgentCredentialRow | undefined;
+    return row ? toAgentCredential(row) : null;
+  }
+
+  revokeAgentCredential(id: string, agentId: string): AgentCredential | null {
+    this.db()
+      .prepare(
+        `UPDATE agent_principal_credentials
+         SET revoked_at = COALESCE(revoked_at, ?)
+         WHERE id = ?
+           AND agent_principal_id = (SELECT id FROM agent_principals WHERE agent_id = ?)`,
+      )
+      .run(new Date().toISOString(), id, agentId);
+    return this.getAgentCredential(id);
+  }
+
+  recordAgentAudit(
+    identity: AgentRuntimeIdentity,
+    action: string,
+    resourceType: string,
+    resourceKey: string,
+    decision: "allow" | "deny",
+    reasonCode: string,
+    metadata?: Record<string, unknown>,
+  ): string {
+    return this.insertAudit({
+      requestId: identity.requestId,
+      userId: identity.ownerUserId,
+      action,
+      resourceType,
+      resourceKey,
+      decision,
+      reasonCode,
+      metadata: {
+        ...metadata,
+        agentPrincipalId: identity.principalId,
+        credentialId: identity.credentialId,
+      },
+    });
+  }
+
   authorize(
     context: AuthContext,
     action: string,
@@ -414,6 +611,18 @@ function toAgentPrincipal(row: AgentPrincipalRow): AgentPrincipal {
     status: row.status,
     createdAt: row.created_at,
     revokedAt: row.revoked_at,
+  };
+}
+
+function toAgentCredential(row: AgentCredentialRow): AgentCredential {
+  return {
+    id: row.id,
+    agentPrincipalId: row.agent_principal_id,
+    agentId: row.agent_id,
+    issuedByUserId: row.issued_by_user_id,
+    expiresAt: row.expires_at,
+    revokedAt: row.revoked_at,
+    createdAt: row.created_at,
   };
 }
 
