@@ -1,7 +1,6 @@
 import type {
   Agent,
   AgentActionLog,
-  AgentApproval,
   AgentCapability,
   AgentCredential,
   AgentPolicyResult,
@@ -223,18 +222,6 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
-  listApprovals: (id: string) =>
-    request<{ approvals: AgentApproval[] }>("/api/agents/" + id + "/approvals"),
-  approveApproval: (agentId: string, approvalId: string) =>
-    request<{ approval: AgentApproval }>(
-      "/api/agents/" + agentId + "/approvals/" + approvalId + "/approve",
-      { method: "POST" },
-    ),
-  denyApproval: (agentId: string, approvalId: string) =>
-    request<{ approval: AgentApproval }>(
-      "/api/agents/" + agentId + "/approvals/" + approvalId + "/deny",
-      { method: "POST" },
-    ),
   listActionLogs: (id: string) =>
     request<{ actions: AgentActionLog[] }>(
       "/api/agents/" + id + "/action-logs",

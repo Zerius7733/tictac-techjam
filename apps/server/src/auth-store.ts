@@ -29,10 +29,6 @@ const defaultAgentCredentialMigrationPath = path.join(
   repositoryRoot,
   "db/migrations/005_agent_credentials.sql",
 );
-const defaultAuthenticatorMigrationPath = path.join(
-  repositoryRoot,
-  "db/migrations/006_authenticator_codes.sql",
-);
 
 export interface AuthUser {
   id: string;
@@ -160,7 +156,6 @@ export class AuthStore {
     private readonly seedPath = defaultSeedPath,
     private readonly agentPrincipalMigrationPath = defaultAgentPrincipalMigrationPath,
     private readonly agentCredentialMigrationPath = defaultAgentCredentialMigrationPath,
-    private readonly authenticatorMigrationPath = defaultAuthenticatorMigrationPath,
   ) {}
 
   async initialize(seedDevelopment: boolean): Promise<void> {
@@ -170,7 +165,6 @@ export class AuthStore {
     this.database.exec(await readFile(this.migrationPath, "utf8"));
     this.database.exec(await readFile(this.agentPrincipalMigrationPath, "utf8"));
     this.database.exec(await readFile(this.agentCredentialMigrationPath, "utf8"));
-    this.database.exec(await readFile(this.authenticatorMigrationPath, "utf8"));
     if (seedDevelopment) {
       this.database.exec(await readFile(this.seedPath, "utf8"));
     }
@@ -305,39 +299,6 @@ export class AuthStore {
       reasonCode: "logout_success",
       metadata: { sessionId: context.sessionId },
     });
-  }
-
-  verifyAuthenticatorCode(userId: string, code: string, requestId: string): boolean {
-    const normalizedCode = code.trim();
-    const row = this.db()
-      .prepare(
-        `SELECT code_hash
-         FROM user_authenticator_codes
-         WHERE user_id = ?
-           AND EXISTS (
-             SELECT 1 FROM users
-             WHERE users.id = user_authenticator_codes.user_id
-               AND users.is_active = 1
-           )`,
-      )
-      .get(userId) as { code_hash: string } | undefined;
-
-    let valid = false;
-    if (/^\d{6}$/.test(normalizedCode) && row) {
-      const expected = Buffer.from(row.code_hash, "hex");
-      const actual = Buffer.from(hashToken(normalizedCode), "hex");
-      valid = expected.length === actual.length && timingSafeEqual(actual, expected);
-    }
-
-    this.insertAudit({
-      requestId,
-      userId,
-      action: "authenticator_verify",
-      resourceType: "agent",
-      decision: valid ? "allow" : "deny",
-      reasonCode: valid ? "authenticator_verified" : "authenticator_invalid",
-    });
-    return valid;
   }
 
   createAgentPrincipal(agentId: string, ownerUserId: string): AgentPrincipal {

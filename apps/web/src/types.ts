@@ -76,28 +76,6 @@ export interface AgentCapability {
   createdAt: string;
 }
 
-export type ApprovalStatus =
-  | "pending"
-  | "approved"
-  | "denied"
-  | "expired"
-  | "consumed";
-
-export interface AgentApproval {
-  id: string;
-  agentPrincipalId: string;
-  requestedByUserId: string;
-  action: PolicyAction;
-  resourceType: string;
-  resourceKey: string;
-  inputText: string;
-  status: ApprovalStatus;
-  expiresAt: string;
-  decidedByUserId: string | null;
-  decidedAt: string | null;
-  createdAt: string;
-}
-
 export interface AgentCredential {
   id: string;
   agentPrincipalId: string;
@@ -113,7 +91,6 @@ export interface AgentActionLog {
   auditLogId: string;
   agentPrincipalId: string;
   capabilityId: string | null;
-  approvalId: string | null;
   action: PolicyAction;
   resourceType: string;
   resourceKey: string;
@@ -124,7 +101,7 @@ export interface AgentActionLog {
 }
 
 export interface AgentPolicyResult {
-  status: "allowed" | "denied" | "approval_required";
+  status: "allowed" | "denied";
   allowed: boolean;
   reasonCode: string;
   actionLogId?: string;
@@ -134,5 +111,4 @@ export interface AgentPolicyResult {
     value?: string;
     updated?: boolean;
   };
-  approval?: AgentApproval;
 }

@@ -9,14 +9,6 @@ export interface ProtectedResourceIntent {
   inputText?: string;
 }
 
-export interface ProtectedCapabilityGrantIntent {
-  kind: "grant-capability";
-  resourceType: "mock_record";
-  resourceKey: string;
-  actions: PolicyAction[];
-  expiresInSeconds: number;
-}
-
 const resourceAliases: Array<{ resourceKey: string; pattern: RegExp }> = [
   {
     resourceKey: "alice-private-note",
@@ -35,8 +27,7 @@ const resourceAliases: Array<{ resourceKey: string; pattern: RegExp }> = [
 const readWords =
   /\b(read|show|view|open|access|look\s+at|fetch|get|content(?:s)?|value|text)\b|\bwhat(?:'s| is)\s+(?:in|inside)\b/i;
 const writeWords = /\b(write|update|change|replace|edit|set|overwrite|save)\b/i;
-const grantWords = /\b(grant|give|allow|delegate|enable)\b/i;
-const grantReadWords = /\b(read|view|see)\b/i;
+const capabilityGrantWords = /\b(grant|give|allow|delegate|enable)\b/i;
 
 function extractWriteText(prompt: string, resourcePattern: RegExp): string {
   const promptWithoutResource = prompt.replace(resourcePattern, " ");
@@ -54,6 +45,7 @@ function extractWriteText(prompt: string, resourcePattern: RegExp): string {
  * calls. Ordinary coding prompts still go to the normal Agent runner.
  */
 export function parseProtectedResourceIntent(prompt: string): ProtectedResourceIntent | null {
+  if (capabilityGrantWords.test(prompt)) return null;
   const action = writeWords.test(prompt) ? "write" : readWords.test(prompt) ? "read" : null;
   if (!action) return null;
   const resource = resourceAliases.find(({ pattern }) => pattern.test(prompt));
@@ -67,39 +59,6 @@ export function parseProtectedResourceIntent(prompt: string): ProtectedResourceI
   };
 }
 
-export function parseProtectedCapabilityGrantIntent(
-  prompt: string,
-): ProtectedCapabilityGrantIntent | null {
-  if (!grantWords.test(prompt)) return null;
-  const actions: PolicyAction[] = [];
-  if (grantReadWords.test(prompt)) actions.push("read");
-  if (writeWords.test(prompt)) actions.push("write");
-  if (actions.length === 0) return null;
-  const resource = resourceAliases.find(({ pattern }) => pattern.test(prompt));
-  if (!resource) return null;
-
-  const hours = prompt.match(/\bfor\s+(\d+)\s*h(?:ours?)?\b/i);
-  const minutes = prompt.match(/\bfor\s+(\d+)\s*m(?:in(?:utes?)?)?\b/i);
-  const seconds = prompt.match(/\bfor\s+(\d+)\s*s(?:ec(?:onds?)?)?\b/i);
-  const duration = hours
-    ? Number(hours[1]) * 3_600
-    : minutes
-      ? Number(minutes[1]) * 60
-      : seconds
-        ? Number(seconds[1])
-        : 3_600;
-  if (!Number.isInteger(duration) || duration < 60 || duration > 86_400) return null;
-
-  return {
-    kind: "grant-capability",
-    resourceType: "mock_record",
-    resourceKey: resource.resourceKey,
-    actions,
-    expiresInSeconds: duration,
-  };
-}
-
-export function parseAuthenticatorCode(prompt: string): string | null {
-  const match = prompt.match(/^\s*(?:auth(?:enticator)?\s*(?:code|token)?\s*[:=]?\s*)?(\d{6})\s*$/i);
-  return match?.[1] ?? null;
+export function isProtectedCapabilityGrantRequest(prompt: string): boolean {
+  return capabilityGrantWords.test(prompt);
 }

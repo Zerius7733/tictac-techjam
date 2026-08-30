@@ -12,22 +12,16 @@ const defaultMigrationPath = path.join(
   repositoryRoot,
   "db/migrations/004_agent_policy.sql",
 );
+const defaultCleanupMigrationPath = path.join(
+  repositoryRoot,
+  "db/migrations/008_remove_unused_approval_authenticator.sql",
+);
 const defaultSeedPath = path.join(
   repositoryRoot,
   "db/seeds/development_policy.sql",
 );
-const defaultCapabilityEnforcementMigrationPath = path.join(
-  repositoryRoot,
-  "db/migrations/007_authenticator_capability_enforcement.sql",
-);
 
 export type PolicyAction = "read" | "write";
-export type ApprovalStatus =
-  | "pending"
-  | "approved"
-  | "denied"
-  | "expired"
-  | "consumed";
 
 export interface AgentCapability {
   id: string;
@@ -52,27 +46,11 @@ export interface MockResource {
   updatedAt: string;
 }
 
-export interface AgentApprovalRequest {
-  id: string;
-  agentPrincipalId: string;
-  requestedByUserId: string;
-  action: PolicyAction;
-  resourceType: string;
-  resourceKey: string;
-  inputText: string;
-  status: ApprovalStatus;
-  expiresAt: string;
-  decidedByUserId: string | null;
-  decidedAt: string | null;
-  createdAt: string;
-}
-
 export interface AgentActionLog {
   id: string;
   auditLogId: string;
   agentPrincipalId: string;
   capabilityId: string | null;
-  approvalId: string | null;
   action: PolicyAction;
   resourceType: string;
   resourceKey: string;
@@ -105,27 +83,11 @@ interface MockResourceRow {
   updated_at: string;
 }
 
-interface ApprovalRow {
-  id: string;
-  agent_principal_id: string;
-  requested_by_user_id: string;
-  action: PolicyAction;
-  resource_type: string;
-  resource_key: string;
-  input_text: string;
-  status: ApprovalStatus;
-  expires_at: string;
-  decided_by_user_id: string | null;
-  decided_at: string | null;
-  created_at: string;
-}
-
 interface ActionLogRow {
   id: string;
   audit_log_id: string;
   agent_principal_id: string;
   capability_id: string | null;
-  approval_id: string | null;
   action: PolicyAction;
   resource_type: string;
   resource_key: string;
@@ -144,21 +106,10 @@ export interface GrantCapabilityInput {
   expiresAt: string;
 }
 
-export interface CreateApprovalInput {
-  agentPrincipalId: string;
-  requestedByUserId: string;
-  action: PolicyAction;
-  resourceType: string;
-  resourceKey: string;
-  inputText: string;
-  expiresAt: string;
-}
-
 export interface RecordActionInput {
   auditLogId: string;
   agentPrincipalId: string;
   capabilityId?: string | null;
-  approvalId?: string | null;
   action: PolicyAction;
   resourceType: string;
   resourceKey: string;
@@ -174,7 +125,6 @@ export class PolicyStore {
     private readonly databasePath: string,
     private readonly migrationPath = defaultMigrationPath,
     private readonly seedPath = defaultSeedPath,
-    private readonly capabilityEnforcementMigrationPath = defaultCapabilityEnforcementMigrationPath,
   ) {}
 
   async initialize(seedDevelopment: boolean): Promise<void> {
@@ -182,7 +132,12 @@ export class PolicyStore {
     this.database = new DatabaseSync(this.databasePath);
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     this.database.exec(await readFile(this.migrationPath, "utf8"));
-    this.database.exec(await readFile(this.capabilityEnforcementMigrationPath, "utf8"));
+    const cleanupApplied = this.database
+      .prepare("SELECT 1 FROM schema_migrations WHERE version = 8")
+      .get();
+    if (!cleanupApplied) {
+      this.database.exec(await readFile(defaultCleanupMigrationPath, "utf8"));
+    }
     if (seedDevelopment) {
       this.database.exec(await readFile(this.seedPath, "utf8"));
     }
@@ -323,176 +278,22 @@ export class PolicyStore {
     return this.getMockResource(resourceType, resourceKey);
   }
 
-  createApproval(input: CreateApprovalInput): AgentApprovalRequest {
-    const id = randomUUID();
-    const now = new Date().toISOString();
-    this.db()
-      .prepare(
-        `INSERT INTO agent_approval_requests
-           (id, agent_principal_id, requested_by_user_id, action, resource_type,
-            resource_key, input_text, status, expires_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-      )
-      .run(
-        id,
-        input.agentPrincipalId,
-        input.requestedByUserId,
-        input.action,
-        input.resourceType,
-        input.resourceKey,
-        input.inputText,
-        input.expiresAt,
-        now,
-      );
-    return this.getApproval(id)!;
-  }
-
-  listApprovals(agentPrincipalId: string): AgentApprovalRequest[] {
-    const rows = this.db()
-      .prepare(
-        `SELECT id, agent_principal_id, requested_by_user_id, action,
-                resource_type, resource_key, input_text, status, expires_at,
-                decided_by_user_id, decided_at, created_at
-         FROM agent_approval_requests
-         WHERE agent_principal_id = ?
-         ORDER BY created_at DESC`,
-      )
-      .all(agentPrincipalId) as unknown as ApprovalRow[];
-    return rows.map(toApproval);
-  }
-
-  getApproval(id: string): AgentApprovalRequest | null {
-    const row = this.db()
-      .prepare(
-        `SELECT id, agent_principal_id, requested_by_user_id, action,
-                resource_type, resource_key, input_text, status, expires_at,
-                decided_by_user_id, decided_at, created_at
-         FROM agent_approval_requests
-         WHERE id = ?`,
-      )
-      .get(id) as ApprovalRow | undefined;
-    return row ? toApproval(row) : null;
-  }
-
-  findPendingApproval(
-    agentPrincipalId: string,
-    action: PolicyAction,
-    resourceType: string,
-    resourceKey: string,
-    inputText: string,
-    requestedByUserId?: string,
-    now = new Date().toISOString(),
-  ): AgentApprovalRequest | null {
-    const requestedByClause = requestedByUserId ? "AND requested_by_user_id = ?" : "";
-    const row = this.db()
-      .prepare(
-        `SELECT id, agent_principal_id, requested_by_user_id, action,
-                resource_type, resource_key, input_text, status, expires_at,
-                decided_by_user_id, decided_at, created_at
-         FROM agent_approval_requests
-         WHERE agent_principal_id = ?
-           AND action = ?
-           AND resource_type = ?
-           AND resource_key = ?
-           AND input_text = ?
-           ${requestedByClause}
-           AND status = 'pending'
-           AND expires_at > ?
-         ORDER BY created_at DESC
-         LIMIT 1`,
-      )
-      .get(
-        ...(requestedByUserId
-          ? [
-              agentPrincipalId,
-              action,
-              resourceType,
-              resourceKey,
-              inputText,
-              requestedByUserId,
-              now,
-            ]
-          : [agentPrincipalId, action, resourceType, resourceKey, inputText, now]),
-      ) as ApprovalRow | undefined;
-    return row ? toApproval(row) : null;
-  }
-
-  findApprovedApproval(
-    agentPrincipalId: string,
-    action: PolicyAction,
-    resourceType: string,
-    resourceKey: string,
-    inputTextPrefix: string,
-  ): AgentApprovalRequest | null {
-    const row = this.db()
-      .prepare(
-        `SELECT id, agent_principal_id, requested_by_user_id, action,
-                resource_type, resource_key, input_text, status, expires_at,
-                decided_by_user_id, decided_at, created_at
-         FROM agent_approval_requests
-         WHERE agent_principal_id = ?
-           AND action = ?
-           AND resource_type = ?
-           AND resource_key = ?
-           AND input_text LIKE ?
-           AND status = 'approved'
-         ORDER BY decided_at DESC
-         LIMIT 1`,
-      )
-      .get(
-        agentPrincipalId,
-        action,
-        resourceType,
-        resourceKey,
-        inputTextPrefix + "%",
-      ) as ApprovalRow | undefined;
-    return row ? toApproval(row) : null;
-  }
-
-  decideApproval(
-    id: string,
-    agentPrincipalId: string,
-    decision: "approved" | "denied",
-    decidedByUserId: string,
-  ): AgentApprovalRequest | null {
-    this.db()
-      .prepare(
-        `UPDATE agent_approval_requests
-         SET status = ?, decided_by_user_id = ?, decided_at = ?
-         WHERE id = ? AND agent_principal_id = ? AND status = 'pending'`,
-      )
-      .run(decision, decidedByUserId, new Date().toISOString(), id, agentPrincipalId);
-    return this.getApproval(id);
-  }
-
-  consumeApproval(id: string, agentPrincipalId: string): AgentApprovalRequest | null {
-    this.db()
-      .prepare(
-        `UPDATE agent_approval_requests
-         SET status = 'consumed'
-         WHERE id = ? AND agent_principal_id = ? AND status = 'approved'`,
-      )
-      .run(id, agentPrincipalId);
-    return this.getApproval(id);
-  }
-
   recordAction(input: RecordActionInput): AgentActionLog {
     const id = randomUUID();
     const now = new Date().toISOString();
     this.db()
       .prepare(
         `INSERT INTO agent_action_logs
-           (id, audit_log_id, agent_principal_id, capability_id, approval_id,
+           (id, audit_log_id, agent_principal_id, capability_id,
             action, resource_type, resource_key, decision, result_code,
             metadata_json, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
         input.auditLogId,
         input.agentPrincipalId,
         input.capabilityId ?? null,
-        input.approvalId ?? null,
         input.action,
         input.resourceType,
         input.resourceKey,
@@ -507,7 +308,7 @@ export class PolicyStore {
   listActionLogs(agentPrincipalId: string): AgentActionLog[] {
     const rows = this.db()
       .prepare(
-        `SELECT id, audit_log_id, agent_principal_id, capability_id, approval_id,
+        `SELECT id, audit_log_id, agent_principal_id, capability_id,
                 action, resource_type, resource_key, decision, result_code,
                 metadata_json, created_at
          FROM agent_action_logs
@@ -521,7 +322,7 @@ export class PolicyStore {
   getActionLog(id: string): AgentActionLog | null {
     const row = this.db()
       .prepare(
-        `SELECT id, audit_log_id, agent_principal_id, capability_id, approval_id,
+        `SELECT id, audit_log_id, agent_principal_id, capability_id,
                 action, resource_type, resource_key, decision, result_code,
                 metadata_json, created_at
          FROM agent_action_logs
@@ -564,23 +365,6 @@ function toMockResource(row: MockResourceRow): MockResource {
   };
 }
 
-function toApproval(row: ApprovalRow): AgentApprovalRequest {
-  return {
-    id: row.id,
-    agentPrincipalId: row.agent_principal_id,
-    requestedByUserId: row.requested_by_user_id,
-    action: row.action,
-    resourceType: row.resource_type,
-    resourceKey: row.resource_key,
-    inputText: row.input_text,
-    status: row.status,
-    expiresAt: row.expires_at,
-    decidedByUserId: row.decided_by_user_id,
-    decidedAt: row.decided_at,
-    createdAt: row.created_at,
-  };
-}
-
 function toActionLog(row: ActionLogRow): AgentActionLog {
   let metadata: Record<string, unknown> = {};
   try {
@@ -596,7 +380,6 @@ function toActionLog(row: ActionLogRow): AgentActionLog {
     auditLogId: row.audit_log_id,
     agentPrincipalId: row.agent_principal_id,
     capabilityId: row.capability_id,
-    approvalId: row.approval_id,
     action: row.action,
     resourceType: row.resource_type,
     resourceKey: row.resource_key,

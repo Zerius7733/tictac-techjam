@@ -1,370 +1,113 @@
 # Authentication and Agent policy verification
 
-This is the shortest end-to-end demo of the authentication middleware. It
-proves four separate boundaries:
+This is the browser-only verification flow for the authentication middleware.
+It proves that:
 
-1. a human must log in before using the API;
+1. a human must log in before using the application;
 2. Agents belong to the human who created them;
-3. an Agent must use its own credential and an explicitly delegated capability;
-4. read and write access are delegated only after the human passes a six-digit
-   authenticator check; and
-5. an Agent with an active delegated capability can access the exact resource,
-   with every decision attributable.
+3. every Agent has its own credential;
+4. read and write access are granted only from **Security & Policy**; and
+5. the backend enforces exact capabilities, expiration, revocation, ownership,
+   and action attribution.
 
-The data is intentionally mock data. Do not use these demo credentials or
-mock-resource values for anything sensitive.
+The chat never grants access and never accepts an approval code. It only uses
+capabilities that are already active.
 
 ## Browser-only verification
 
-You can verify the main flow without using a terminal or manually editing the
-database:
+1. Open `http://localhost:3000` and sign in as `alice`.
+2. Select an Alice-owned Agent, or create one. Open **Security & Policy**.
+3. In **Give the Agent its own key**, click **Issue Agent credential**. Keep the
+   browser credential; it is shown once and is required by protected chat.
+4. In **Choose the smallest access**, select `alice-private-note`, choose
+   **Read**, and click **Grant read access**. Confirm that the capability is
+   listed as active for one hour.
+5. Choose **Write** and click **Grant write access**. Read and write are two
+   exact capabilities, so grant each one separately.
+6. Close the panel, select **Protected data**, and send:
 
-1. Open the Launchpad UI and sign in as `alice`.
-2. Create an Agent. The Agent is created first, then the `Security & Policy`
-   panel opens automatically.
-3. Click `Issue Agent credential`. The raw credential is shown once and kept
-   only in the current browser tab.
-4. Close the panel, select `Protected data` above the chat composer, and type
-   `Grant read access to Alice's private notes for 1 hour`. The Agent should
-   create a pending request and ask for the six-digit authenticator code.
-5. Reply with Alice's development code, `246810`. The Agent should confirm
-   that read access is enabled for one hour. Bob's development code is
-   `135790`.
-6. Type `Read Alice's private notes`. The assistant response should include
-   the Alice note and `Policy decision: read_completed`.
-7. Reopen `Security & Policy` and confirm the approved read request appears in
-   Authenticator history. Revoke the active `alice-private-note` read
-   capability, close the panel, and send the same chat request again. The
-   assistant should show `capability_not_granted` and no note value.
-8. In `Protected data` mode, type `Grant write access to Alice's private
-   notes for 1 hour`. Reply with `246810`, then type `Write into Alice's
-   private notes, changing it to Sahara means desert`.
-9. The assistant should confirm the update with
-   `Policy decision: write_completed`. Ask `Read Alice's private notes` and
-   confirm the new value is returned. Revoke the write capability and repeat
-   the write; it should now show `capability_not_granted`.
+   ```text
+   read Alice's private notes
+   ```
 
-The panel is intentionally focused on identity, credentials, delegated
-capabilities, and authenticator history. The conversation is the user-facing
-read/write approval step. The backend still enforces every capability through
-the policy gateway and automated/API checks; the UI cannot grant access
-directly.
+   The Agent should return the Alice note and show `read_completed`.
+7. Send:
 
-While performing these steps, refresh `data/auth.db` in the SQLite viewer to
-observe `agent_capabilities`, `agent_approval_requests`, and
-`agent_action_logs`. The UI demonstrates the behavior; those tables provide
-the backend evidence. Never expect the raw Agent credential to appear in the
-database because only its hash is stored.
+   ```text
+   write into Alice's private notes, changing it to Sahara means desert
+   ```
 
-## 1. Start or restart the server
+   The Agent should confirm the update and show `write_completed`.
+8. Read Alice's private notes again. The new value should be returned.
+9. Open **Security & Policy**, revoke the read capability, and try the read
+   again. The Agent should be denied with `capability_not_granted`.
+10. Revoke the write capability and try the write again. It should also be
+    denied with `capability_not_granted`.
+11. Type a grant request in Protected data chat, for example:
 
-From the repository root:
+    ```text
+    grant read access to Alice's private notes
+    ```
 
-```sh
-npm run dev
-```
+    The Agent should explain that access can only be granted from Security &
+    Policy. No capability should be created.
 
-If the server is already running, restart it once. Startup applies migrations
-`004_agent_policy.sql`, `005_agent_credentials.sql`, and
-`006_authenticator_codes.sql` and
-`007_authenticator_capability_enforcement.sql`, then seeds the mock resources
-in development mode. Existing capabilities are invalidated once on upgrade
-so they must be re-approved with the authenticator code. If using Docker,
-rebuild it:
+## Ownership and isolation checks
 
-```sh
-docker compose up --build
-```
+- Sign in as Bob. Bob should not see Alice's Agent in the Agent list.
+- As Alice, try `read Bob's private notes` in Protected data mode. The backend
+  should deny it with an ownership mismatch; changing the chat wording must not
+  bypass that check.
+- In Security & Policy, Alice's resource list should contain her private note
+  and the shared status record, not Bob's private note.
+- Revoke the Agent credential and retry a protected request. The request should
+  fail because the Agent no longer has a valid credential.
 
-If the SQLite viewer was already open, close and reopen `data/auth.db`, then
-refresh its table list. You should see:
+## Restarting the local server
+
+Restart the server after pulling this change so it loads the current policy
+behavior. On startup, migration 008 removes the retired approval and
+development-authenticator tables from an existing `data/auth.db` while keeping
+users, resources, capabilities, and action logs.
+
+If the SQLite viewer was already open, close and reopen `data/auth.db` after the
+restart. The current policy tables should include:
 
 ```text
 agent_action_logs
-agent_approval_requests
 agent_capabilities
 agent_principal_credentials
 agent_principals
 mock_resources
-user_authenticator_codes
 ```
 
-## 2. Log in as Alice
+You should not see `agent_approval_requests` or
+`user_authenticator_codes` after migration 008 has run.
 
-```sh
-curl -s http://localhost:3000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"alice","password":"alice-demo-2026"}'
-```
+## What to observe in the database viewer
 
-Copy the returned `sessionToken`. Use it below as `<ALICE_SESSION>`.
+Refresh `data/auth.db` and inspect:
 
-Expected: HTTP `200`, user `alice`, role `developer`.
+- `users`: Alice and Bob's login identities;
+- `agent_principals`: the independent identity for each Agent;
+- `agent_principal_credentials`: credential metadata and revocation state;
+- `agent_capabilities`: exact `read`/`write` grants, grantor, expiration, and
+  revocation time;
+- `mock_resources`: the protected note values; and
+- `agent_action_logs` / `audit_logs`: allow and deny decisions with the human,
+  Agent, resource, action, and reason.
 
-Wrong credentials must fail:
+The raw password, human session token, and Agent credential are never stored in
+plaintext. The mock note values are intentionally visible demo data.
 
-```sh
-curl -i http://localhost:3000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"alice","password":"wrong"}'
-```
+## Automated checks
 
-Expected: HTTP `401`.
-
-If `APP_AUTH_TOKEN` is configured, add this header to every request below:
-`-H 'X-App-Auth-Token: <APP_AUTH_TOKEN>'`.
-
-## 3. Verify human session and ownership
-
-```sh
-curl -s http://localhost:3000/api/auth/me \
-  -H 'Authorization: Bearer <ALICE_SESSION>'
-
-curl -s http://localhost:3000/api/agents \
-  -H 'Authorization: Bearer <ALICE_SESSION>'
-```
-
-Expected: both requests succeed. Create an Agent through the UI or API:
-
-```sh
-curl -s -X POST http://localhost:3000/api/agents \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <ALICE_SESSION>' \
-  -d '{"name":"Alice security demo agent","description":"Policy test"}'
-```
-
-Save the returned `agent.id` as `<AGENT_ID>`. The response must include:
-
-```json
-{
-  "ownerUserId": "Alice's user id",
-  "principalId": "a different id"
-}
-```
-
-The owner is assigned by the server from the session. The browser cannot
-choose it.
-
-Now log in as Bob and save that token as `<BOB_SESSION>`:
-
-```sh
-curl -s http://localhost:3000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"username":"bob","password":"bob-demo-2026"}'
-```
-
-Bob must not see Alice's Agent:
-
-```sh
-curl -i http://localhost:3000/api/agents/<AGENT_ID> \
-  -H 'Authorization: Bearer <BOB_SESSION>'
-```
-
-Expected: HTTP `404`. The API intentionally does not reveal that an
-unauthorized Agent exists.
-
-## 4. Issue a separate Agent credential
-
-Alice issues a short-lived credential for her Agent:
-
-```sh
-curl -s -X POST http://localhost:3000/api/agents/<AGENT_ID>/credentials \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <ALICE_SESSION>' \
-  -d '{"expiresInSeconds":3600}'
-```
-
-Save `credential.token` as `<AGENT_TOKEN>`. It is shown only at issuance and
-starts with `agt_`. The database stores only a hash, never this raw token.
-
-Without the Agent credential, the Agent tool endpoint must fail:
-
-```sh
-curl -i -X POST http://localhost:3000/api/agent/tool-calls \
-  -H 'Content-Type: application/json' \
-  -d '{"action":"read","resourceType":"mock_record","resourceKey":"alice-private-note"}'
-```
-
-Expected: HTTP `401`.
-
-## 5. Verify capability enforcement
-
-Even with the Agent credential, no capability means no resource access:
-
-```sh
-curl -i -X POST http://localhost:3000/api/agent/tool-calls \
-  -H 'Content-Type: application/json' \
-  -H 'X-Agent-Principal-Token: <AGENT_TOKEN>' \
-  -d '{"action":"read","resourceType":"mock_record","resourceKey":"alice-private-note"}'
-```
-
-Expected: HTTP `403` with `reasonCode: "capability_not_granted"`.
-
-Alice delegates only the exact resource and action needed:
-
-```sh
-curl -s -X POST http://localhost:3000/api/agents/<AGENT_ID>/capabilities \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <ALICE_SESSION>' \
-  -d '{"resourceType":"mock_record","resourceKey":"alice-private-note","action":"read","expiresInSeconds":3600}'
-```
-
-Repeat the Agent call above. Expected: HTTP `200` and the Alice note value.
-
-Attempting to grant or read Bob's private note from Alice's Agent must fail:
-
-```sh
-curl -i -X POST http://localhost:3000/api/agents/<AGENT_ID>/capabilities \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <ALICE_SESSION>' \
-  -d '{"resourceType":"mock_record","resourceKey":"bob-private-note","action":"read","expiresInSeconds":3600}'
-```
-
-Expected: HTTP `403`. This is the important server-side ownership check; it is
-not just a hidden UI item.
-
-## 6. Verify read and write access with authenticator-gated delegation
-
-The direct capability endpoint intentionally refuses to create either a read
-or write capability. Request access in the Protected data chat, then reply
-with the development authenticator code. For example:
-
-```sh
-curl -s -X POST http://localhost:3000/api/agents/<AGENT_ID>/messages \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer <ALICE_SESSION>' \
-  -H 'X-Agent-Principal-Token: <AGENT_TOKEN>' \
-  -d '{"mode":"protected-data","content":"grant read access to alice-private-note for 1 hour"}'
-```
-
-Reply with `246810` in the same conversation. The backend verifies the code,
-marks the `agent_approval_requests` row approved, and creates the requested
-read capability expiring one hour later. The same flow applies to write
-access. The raw code is never stored; only its hash is stored in
-`user_authenticator_codes`.
-
-Ask the Agent to write with the same Agent credential:
-
-```sh
-curl -i -X POST http://localhost:3000/api/agent/tool-calls \
-  -H 'Content-Type: application/json' \
-  -H 'X-Agent-Principal-Token: <AGENT_TOKEN>' \
-  -d '{"action":"write","resourceType":"mock_record","resourceKey":"alice-private-note","inputText":"Approved replacement note"}'
-```
-
-Expected: HTTP `200`, `reasonCode: "read_completed"`, and the mock resource
-value is returned. To verify the write variant, request `grant write access`
-through chat, verify it with `246810`, and repeat the write call. A wrong code
-marks the pending request denied and creates no capability. The old approve
-endpoint cannot bypass the authenticator check for either read or write
-requests.
-
-## 7. Verify revocation
-
-List capabilities and copy the write or read `id`:
-
-```sh
-curl -s http://localhost:3000/api/agents/<AGENT_ID>/capabilities \
-  -H 'Authorization: Bearer <ALICE_SESSION>'
-```
-
-Revoke it:
-
-```sh
-curl -s -X POST http://localhost:3000/api/agents/<AGENT_ID>/capabilities/<CAPABILITY_ID>/revoke \
-  -H 'Authorization: Bearer <ALICE_SESSION>'
-```
-
-The same Agent call must now return HTTP `403` with
-`reasonCode: "capability_not_granted"`.
-
-Revoke the Agent credential too:
-
-```sh
-curl -s -X POST http://localhost:3000/api/agents/<AGENT_ID>/credentials/<CREDENTIAL_ID>/revoke \
-  -H 'Authorization: Bearer <ALICE_SESSION>'
-```
-
-Any subsequent call with `<AGENT_TOKEN>` must return HTTP `401`.
-
-## 8. Verify protected access from the chat UI
-
-The playground has two explicit chat modes:
-
-- `Agent tasks` sends the prompt to the normal Agent runner. Mentioning a
-  protected note in this mode does not automatically read the database.
-- `Protected data` sends the request through the backend policy gateway. The
-  Agent credential and an active exact capability are still required.
-
-Select `Protected data`, then try:
-
-```text
-Tell me the contents of Alice's private notes
-```
-
-With the credential and an authenticator-approved read capability, the chat should show the protected
-note value. Without either one, it should show a policy denial. You can use
-`/data` at the beginning of a normal-mode message as the same explicit
-shortcut, for example:
-
-```text
-/data read Alice's private notes
-```
-
-Typing `/data` by itself switches the composer to `Protected data` mode; it
-does not send an incomplete request.
-
-The shortcut changes routing only; it cannot bypass the credential or
-capability checks.
-
-## 9. Inspect attribution in SQLite
-
-In the SQLite viewer, inspect these tables:
-
-```sql
-SELECT username, is_active FROM users ORDER BY username;
-
-SELECT agent_id, owner_user_id, status
-FROM agent_principals;
-
-SELECT agent_principal_id, resource_type, resource_key, action,
-       granted_by_user_id, expires_at, revoked_at
-FROM agent_capabilities
-ORDER BY created_at DESC;
-
-SELECT agent_principal_id, action, resource_type, resource_key,
-       decision, result_code, capability_id, approval_id, created_at
-FROM agent_action_logs
-ORDER BY created_at DESC;
-
-SELECT action, resource_type, resource_key, decision, reason_code,
-       user_id, metadata_json, created_at
-FROM audit_logs
-ORDER BY created_at DESC
-LIMIT 20;
-```
-
-You should be able to trace:
-
-```text
-Alice human session
-  -> Alice-owned Agent principal
-    -> capability granted by Alice
-      -> Agent credential authentication
-        -> tool decision
-          -> authenticator approval -> one-hour read/write capability
-            -> action log + audit log
-```
-
-No password, session token, Agent token, or mock resource value is stored in
-the action metadata.
-
-## Backend test command
-
-The automated checks cover login/session behavior, ownership isolation,
-capability enforcement, delegated writes, credential separation, and
-credential revocation:
+From the repository root:
 
 ```sh
 npm run check
 ```
+
+The checks cover human login, ownership isolation, independent Agent
+credentials, direct capability grants, protected reads and writes, expiration,
+and revocation.

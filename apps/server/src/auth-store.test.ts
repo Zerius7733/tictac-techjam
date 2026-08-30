@@ -91,15 +91,4 @@ describe("AuthStore", () => {
     store.close();
   });
 
-  it("verifies the development authenticator code without storing the code itself", async () => {
-    const store = await makeAuthStore();
-    const login = store.login("alice", "alice-demo-2026", "request-login");
-
-    expect(store.verifyAuthenticatorCode(login!.user.id, "000000", "request-wrong-code"))
-      .toBe(false);
-    expect(store.verifyAuthenticatorCode(login!.user.id, "246810", "request-right-code"))
-      .toBe(true);
-
-    store.close();
-  });
 });

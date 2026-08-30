@@ -9,7 +9,6 @@ import {
 import type {
   Agent,
   AgentActionLog,
-  AgentApproval,
   AgentCapability,
   AgentCredential,
   AgentRun,
@@ -65,6 +64,7 @@ function Spinner() {
 type SecurityBusyAction =
   | "loading"
   | "credential"
+  | "grant"
   | "revoke"
   | null;
 
@@ -74,7 +74,6 @@ interface SecurityPanelProps {
   setupMode?: boolean;
   initialAgentCredential: { id: string; token: string } | null;
   onAgentCredentialChange: (credential: { id: string; token: string } | null) => void;
-  onOpenProtectedChat: (requestText: string) => void;
   onClose: () => void;
 }
 
@@ -93,13 +92,11 @@ function SecurityPanel({
   setupMode = false,
   initialAgentCredential,
   onAgentCredentialChange,
-  onOpenProtectedChat,
   onClose,
 }: SecurityPanelProps) {
   const [resources, setResources] = useState<MockResource[]>([]);
   const [capabilities, setCapabilities] = useState<AgentCapability[]>([]);
   const [credentials, setCredentials] = useState<AgentCredential[]>([]);
-  const [approvals, setApprovals] = useState<AgentApproval[]>([]);
   const [actionLogs, setActionLogs] = useState<AgentActionLog[]>([]);
   const [resourceKey, setResourceKey] = useState("");
   const [action, setAction] = useState<PolicyAction>("read");
@@ -112,18 +109,16 @@ function SecurityPanel({
   const [notice, setNotice] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
-    const [resourceResult, capabilityResult, credentialResult, approvalResult, logResult] =
+    const [resourceResult, capabilityResult, credentialResult, logResult] =
       await Promise.all([
         api.listResources(),
         api.listCapabilities(agent.id),
         api.listCredentials(agent.id),
-        api.listApprovals(agent.id),
         api.listActionLogs(agent.id),
       ]);
     setResources(resourceResult.resources);
     setCapabilities(capabilityResult.capabilities);
     setCredentials(credentialResult.credentials);
-    setApprovals(approvalResult.approvals);
     setActionLogs(logResult.actions);
     setResourceKey((current) =>
       current && resourceResult.resources.some((resource) => resource.resourceKey === current)
@@ -145,7 +140,6 @@ function SecurityPanel({
     (capability) =>
       !capability.revokedAt && new Date(capability.expiresAt).getTime() > Date.now(),
   );
-  const pendingApprovals = approvals.filter((approval) => approval.status === "pending");
 
   const runWithRefresh = async (work: () => Promise<void>, busy: SecurityBusyAction) => {
     setBusyAction(busy);
@@ -176,9 +170,17 @@ function SecurityPanel({
 
   const grantCapability = async () => {
     if (!selectedResource) return;
-    onOpenProtectedChat(
-      `grant ${action} access to ${selectedResource.resourceKey} for 1 hour`,
-    );
+    await runWithRefresh(async () => {
+      await api.grantCapability(agent.id, {
+        resourceType: selectedResource.resourceType,
+        resourceKey: selectedResource.resourceKey,
+        action,
+        expiresInSeconds: 3_600,
+      });
+      setNotice(
+        `${action === "read" ? "Read" : "Write"} access to ${selectedResource.resourceKey} is enabled for 1 hour.`,
+      );
+    }, "grant");
   };
 
   const revokeCapability = async (capabilityId: string) => {
@@ -307,7 +309,7 @@ function SecurityPanel({
               <span className="security-count">{activeCapabilities.length} active</span>
             </div>
             <p className="security-copy">
-              A capability is exact: one Agent, one resource, and one action. Both read and write access are granted from Protected data chat after authenticator verification.
+              A capability is exact: one Agent, one resource, and one action. Grant read or write access here, then the backend enforces it for every protected request.
             </p>
             <label>
               Protected resource
@@ -336,7 +338,7 @@ function SecurityPanel({
               onClick={() => void grantCapability()}
               disabled={busyAction !== null || !selectedResource}
             >
-              Request {action} access in chat
+              {busyAction === "grant" ? <Spinner /> : `Grant ${action} access`}
             </button>
             <div className="security-list">
               {capabilities.length === 0 ? (
@@ -368,36 +370,7 @@ function SecurityPanel({
           </section>
         </div>
 
-        <div className="security-grid">
-          <section className="security-card">
-            <div className="security-card-heading">
-              <div>
-                <span className="eyebrow">Authenticator history</span>
-                <h3>Access decisions</h3>
-              </div>
-              <span className="security-count">{pendingApprovals.length} pending</span>
-            </div>
-            <div className="security-list compact-list">
-              {approvals.length === 0 ? (
-                <div className="security-empty">No approval requests yet.</div>
-              ) : (
-                approvals.slice(0, 4).map((approval) => (
-                  <div className="security-list-row" key={approval.id}>
-                    <div>
-                      <strong>{approval.status} · {approval.action} · {approval.resourceKey}</strong>
-                      <span>
-                        {approval.status === "pending"
-                          ? "Waiting for the six-digit authenticator code"
-                          : approval.decidedAt
-                            ? `Decided ${formatPolicyTime(approval.decidedAt)}`
-                            : "No decision recorded"}
-                      </span>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-          </section>
+        <div className="security-grid security-grid-single">
           <section className="security-card">
             <div className="security-card-heading">
               <div>
@@ -1126,7 +1099,7 @@ export default function App() {
                   </div>
                   <span className="composer-mode-help">
                     {chatMode === "protected-data"
-                      ? "Read, request access, or enter a six-digit approval code"
+                      ? "Read or write access already granted in Security & Policy"
                       : "Use /data as a shortcut · type it alone to switch"}
                   </span>
                 </div>
@@ -1143,8 +1116,8 @@ export default function App() {
                     selected.status === "stopped"
                       ? "Start this Agent to continue…"
                       : chatMode === "protected-data"
-                        ? "Try: grant read access to Alice’s private notes for 1 hour…"
-                        : "Describe what you want the Agent to do…"
+                      ? "Try: read Alice’s private notes…"
+                      : "Describe what you want the Agent to do…"
                   }
                   disabled={
                     selected.status === "stopped" ||
@@ -1270,12 +1243,6 @@ export default function App() {
           onAgentCredentialChange={(credential) =>
             rememberAgentCredential(selected.id, credential)
           }
-          onOpenProtectedChat={(requestText) => {
-            setShowSecurity(false);
-            setSecuritySetup(false);
-            setChatMode("protected-data");
-            setPrompt(requestText);
-          }}
           onClose={() => {
             setShowSecurity(false);
             setSecuritySetup(false);

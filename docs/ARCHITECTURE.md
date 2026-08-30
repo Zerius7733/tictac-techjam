@@ -55,7 +55,7 @@ Interrupted Runs become `cancelled` after a restart.
 
 ```text
 data/auth.db              Users, roles, sessions, permissions, Agent principals,
-                          credentials, capabilities, approvals, mock resources, audits
+                          credentials, capabilities, mock resources, audits
 data/launchpad.json       Agent, ownership, message, and Run metadata
 workspaces/AgentID/       Agent-created files
 workspaces/.deleted/      Archived deleted workspaces
@@ -69,7 +69,7 @@ one process only.
 migration. It stores only password hashes and session-token hashes. In
 development it applies the deterministic Alice/Bob seed and the mock policy
 records; production does not auto-seed demo users. `AgentPolicyGateway` keeps
-capability, approval, and action-log rules out of the HTTP handlers.
+capability and action-log rules out of the HTTP handlers.
 
 ### Runtime providers
 
@@ -93,7 +93,7 @@ the stored Codex thread, and escalate termination after a grace period.
 | Track | Primary seam | Expected change |
 | --- | --- | --- |
 | Glass Box | `AgentRunner`, `AgentRun` | Emit and display correlated execution events. |
-| Bouncer | `AuthStore`, `AgentPolicyGateway`, API routes | Human identity, object-level ownership, independent per-Agent principals, scoped capabilities, approvals, and revocation. |
+| Bouncer | `AuthStore`, `AgentPolicyGateway`, API routes | Human identity, object-level ownership, independent per-Agent principals, scoped capabilities, and revocation. |
 | Kill Switch | `AgentRunner` | Add threat-specific policy or a stronger sandbox. |
 
 The current container or ECS instance is the POC trust boundary. Ordinary

@@ -29,7 +29,7 @@ Volcengine ECS.
 - Agent create, edit, start, stop, delete, and multi-turn chat
 - Fastify control plane with asynchronous Run state
 - Database-backed Alice/Bob login, Agent ownership, delegated capabilities,
-  approvals, and revocable Agent credentials
+  and revocable Agent credentials
 - Persistent Agent workspaces and Codex sessions
 - Disposable Docker, Colima, or Podman container for each local turn
 - Docker and Terraform deployment paths for Volcengine ECS

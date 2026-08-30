@@ -104,16 +104,7 @@ describe("Agent policy HTTP boundary", () => {
           expiresInSeconds: 3_600,
         },
       });
-      expect(grant.statusCode).toBe(409);
-
-      const humanContext = authStore.authenticate(sessionToken, "request-read-grant")!;
-      const approval = policyGateway.requestCapability(humanContext, agent, {
-        action: "read",
-        resourceType: "mock_record",
-        resourceKey: "alice-private-note",
-        expiresInSeconds: 3_600,
-      });
-      policyGateway.verifyCapability(humanContext, agent, approval.id, "246810");
+      expect(grant.statusCode).toBe(201);
 
       const allowed = await app.inject({
         method: "POST",

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { AgentRuntimeIdentity, AuthContext, AuthStore } from "./auth-store.js";
+import type { AgentRuntimeIdentity, AuthStore } from "./auth-store.js";
 import { AgentPolicyGateway } from "./agent-policy-gateway.js";
 import type { AppConfig } from "./config.js";
 import { isArkConfigured } from "./config.js";
@@ -17,20 +17,15 @@ import type {
 import { WorkspaceManager } from "./workspace.js";
 import {
   type ChatMode,
-  type ProtectedCapabilityGrantIntent,
   type ProtectedResourceIntent,
-  parseAuthenticatorCode,
-  parseProtectedCapabilityGrantIntent,
+  isProtectedCapabilityGrantRequest,
   parseProtectedResourceIntent,
 } from "./protected-resource-intent.js";
-import type { AgentApprovalRequest } from "./policy-store.js";
 
 const now = () => new Date().toISOString();
 
 type ProtectedChatOperation =
-  | { kind: "resource"; intent: ProtectedResourceIntent }
-  | { kind: "grant"; intent: ProtectedCapabilityGrantIntent }
-  | { kind: "verify"; approvalIds: string[]; code: string };
+  | { kind: "resource"; intent: ProtectedResourceIntent };
 
 export class AgentService {
   private readonly activeExecutions = new Map<string, Promise<void>>();
@@ -213,7 +208,6 @@ export class AgentService {
     agentIdentity?: AgentRuntimeIdentity,
     mode: ChatMode = "agent",
     humanIdentity?: HumanIdentity,
-    humanContext?: AuthContext,
   ): Promise<{ run: AgentRun; message: Message }> {
     const agent = this.getAgent(agentId, ownerUserId, includeAll);
     const commandRequested = /^\s*\/data\b/i.test(prompt);
@@ -221,36 +215,15 @@ export class AgentService {
       ? prompt.replace(/^\s*\/data\s*/i, "").trim()
       : prompt;
     const protectedMode = mode === "protected-data" || commandRequested;
-    const protectedGrantIntent = protectedMode
-      ? parseProtectedCapabilityGrantIntent(policyPrompt)
-      : null;
-    const protectedIntent = protectedMode && !protectedGrantIntent
-      ? parseProtectedResourceIntent(policyPrompt)
-      : null;
-    const authenticatorCode = protectedMode ? parseAuthenticatorCode(policyPrompt) : null;
-    const currentHumanUserId = humanContext?.userId ?? ownerUserId;
-    const pendingApprovals: AgentApprovalRequest[] =
-      authenticatorCode && currentHumanUserId && this.policyGateway
-        ? this.policyGateway.listPendingCapabilityApprovals(agent, currentHumanUserId)
-        : [];
-    const protectedOperation: ProtectedChatOperation | null = protectedMode
-      ? protectedGrantIntent
-        ? { kind: "grant", intent: protectedGrantIntent }
-        : authenticatorCode && pendingApprovals.length > 0
-          ? {
-              kind: "verify",
-              approvalIds: pendingApprovals.map((approval) => approval.id),
-              code: authenticatorCode,
-            }
-          : protectedIntent
-            ? { kind: "resource", intent: protectedIntent }
-            : null
+    const protectedIntent = protectedMode ? parseProtectedResourceIntent(policyPrompt) : null;
+    const protectedOperation: ProtectedChatOperation | null = protectedIntent
+      ? { kind: "resource", intent: protectedIntent }
       : null;
     const protectedRequestError =
       protectedMode && !protectedOperation
-        ? authenticatorCode
-          ? "There is no pending read or write authorization request for this Agent. Ask me to grant access first."
-          : "I couldn’t understand that protected-data request. Try ‘read Alice’s private notes’, ‘read Bob’s private notes’, or ‘read shared-status’. To grant access, say ‘grant read access to Alice’s private notes for 1 hour’ or ‘grant write access to Alice’s private notes for 1 hour’."
+        ? isProtectedCapabilityGrantRequest(policyPrompt)
+          ? "Access can only be granted from Security & Policy. Open that panel, choose the resource and action, then click Grant access."
+          : "I couldn’t understand that protected-data request. Try ‘read Alice’s private notes’, ‘write Alice’s private notes to ...’, ‘read Bob’s private notes’, or ‘read shared-status’."
         : null;
     if (!protectedOperation && !protectedRequestError && !isArkConfigured(this.config)) {
       throw new HttpError(
@@ -306,7 +279,6 @@ export class AgentService {
       protectedOperation,
       protectedRequestError,
       humanIdentity,
-      humanContext,
     );
     this.activeExecutions.set(agentId, execution);
     void execution
@@ -345,7 +317,6 @@ export class AgentService {
     protectedOperation: ProtectedChatOperation | null = null,
     protectedRequestError: string | null = null,
     humanIdentity?: HumanIdentity,
-    humanContext?: AuthContext,
   ): Promise<void> {
     await this.store.mutate((database) => {
       const storedRun = database.runs.find((item) => item.id === run.id);
@@ -365,16 +336,7 @@ export class AgentService {
             usage: null,
           }
         : protectedOperation
-          ? protectedOperation.kind === "resource"
-            ? this.runProtectedResourceRequest(agentAtStart, protectedOperation.intent, agentIdentity)
-            : protectedOperation.kind === "grant"
-              ? this.runProtectedCapabilityGrant(agentAtStart, protectedOperation.intent, humanContext)
-              : this.runAuthenticatorVerification(
-                  agentAtStart,
-                  protectedOperation.approvalIds,
-                  protectedOperation.code,
-                  humanContext,
-                )
+          ? this.runProtectedResourceRequest(agentAtStart, protectedOperation.intent, agentIdentity)
           : await this.runner.run({
               agentId: agentAtStart.id,
               workspacePath: agentAtStart.workspacePath,
@@ -464,100 +426,13 @@ export class AgentService {
     const requirement =
       decision.reasonCode === "write_input_required"
         ? "Include the new note text in the write request."
-        : decision.status === "approval_required"
-          ? "Open Security & Policy to review the pending human approval."
-          : "The Agent needs an active capability for this exact resource and action.";
+        : "The Agent needs an active capability for this exact resource and action.";
     return {
       output: [
         `I couldn’t ${verb} ${intent.resourceKey}. The backend policy gateway denied the Agent request.`,
         "",
         `Policy decision: ${decision.reasonCode}`,
         requirement,
-      ].join("\n"),
-      threadId: agent.codexThreadId,
-      usage: null,
-    };
-  }
-
-  private runProtectedCapabilityGrant(
-    agent: Agent,
-    intent: ProtectedCapabilityGrantIntent,
-    context?: AuthContext,
-  ) {
-    if (!context) {
-      return {
-        output: "I need the signed-in human owner’s session before I can request access.",
-        threadId: agent.codexThreadId,
-        usage: null,
-      };
-    }
-    if (!this.policyGateway) {
-      throw new HttpError(503, "Agent policy is not configured");
-    }
-    const approvalGroupId = randomUUID();
-    for (const action of intent.actions) {
-      this.policyGateway.requestCapability(context, agent, {
-        action,
-        resourceType: intent.resourceType,
-        resourceKey: intent.resourceKey,
-        expiresInSeconds: intent.expiresInSeconds,
-        approvalGroupId,
-      });
-    }
-    const actionLabel = intent.actions.length === 2
-      ? "read and write"
-      : intent.actions[0];
-    return {
-      output: [
-        `I’m requesting ${actionLabel} access to ${intent.resourceKey} for ${formatDuration(intent.expiresInSeconds)}.`,
-        "",
-        "Reply with your six-digit authenticator code to approve it. The code is checked by the backend and is never sent to the Agent model.",
-      ].join("\n"),
-      threadId: agent.codexThreadId,
-      usage: null,
-    };
-  }
-
-  private runAuthenticatorVerification(
-    agent: Agent,
-    approvalIds: string[],
-    code: string,
-    context?: AuthContext,
-  ) {
-    if (!context) {
-      return {
-        output: "I need the signed-in human owner’s session before I can verify that code.",
-        threadId: agent.codexThreadId,
-        usage: null,
-      };
-    }
-    if (!this.policyGateway) {
-      throw new HttpError(503, "Agent policy is not configured");
-    }
-    const result = this.policyGateway.verifyCapabilities(
-      context,
-      agent,
-      approvalIds,
-      code,
-    );
-    if (!result.approved) {
-      return {
-        output: "That authenticator code was not accepted. The access authorization request was denied.",
-        threadId: agent.codexThreadId,
-        usage: null,
-      };
-    }
-    const actionLabel = result.approvals.length === 2
-      ? "Read and write"
-      : result.approvals[0]!.action === "read" ? "Read" : "Write";
-    const actionVerb = result.approvals.length === 2
-      ? "read or write"
-      : result.approvals[0]!.action;
-    return {
-      output: [
-        `${actionLabel} access to ${result.approvals[0]!.resourceKey} is enabled for ${formatDuration(result.expiresInSeconds)}.`,
-        "",
-        `You can now ask me to ${actionVerb} the protected resource. The Agent credential and these capabilities are both still required.`,
       ].join("\n"),
       threadId: agent.codexThreadId,
       usage: null,
@@ -630,13 +505,4 @@ export class AgentService {
       this.cancellationRequests.delete(agentId);
     }
   }
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds % 3_600 === 0) {
-    const hours = seconds / 3_600;
-    return `${hours} hour${hours === 1 ? "" : "s"}`;
-  }
-  const minutes = Math.round(seconds / 60);
-  return `${minutes} minute${minutes === 1 ? "" : "s"}`;
 }

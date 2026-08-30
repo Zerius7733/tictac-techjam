@@ -244,13 +244,13 @@ describe("Agent lifecycle", () => {
     await expect.poll(() => service.getRun(denied.run.id).status).toBe("completed");
     expect(service.getRun(denied.run.id).output).toContain("capability_not_granted");
 
-    const readApproval = gateway.requestCapability(context, agent, {
+    const readCapability = gateway.grantCapability(context, agent, {
       resourceType: "mock_record",
       resourceKey: "alice-private-note",
       action: "read",
       expiresInSeconds: 3_600,
     });
-    gateway.verifyCapability(context, agent, readApproval.id, "246810");
+    expect(readCapability.action).toBe("read");
     const allowed = await service.sendMessage(
       agent.id,
       "read Alice's private notes",
@@ -263,12 +263,13 @@ describe("Agent lifecycle", () => {
     expect(service.getRun(allowed.run.id).output).toContain("Alice private note");
     expect(service.getRun(allowed.run.id).output).toContain("read_completed");
 
-    const writeApproval = gateway.requestWriteCapability(context, agent, {
+    const writeCapability = gateway.grantCapability(context, agent, {
       resourceType: "mock_record",
       resourceKey: "alice-private-note",
+      action: "write",
       expiresInSeconds: 3_600,
     });
-    gateway.verifyWriteCapability(context, agent, writeApproval.id, "246810");
+    expect(writeCapability.action).toBe("write");
     const updated = await service.sendMessage(
       agent.id,
       "write into Alice's private notes, changing it to Sahara means desert",
@@ -297,45 +298,31 @@ describe("Agent lifecycle", () => {
     await expect.poll(() => service.getRun(readAfterWrite.run.id).status).toBe("completed");
     expect(service.getRun(readAfterWrite.run.id).output).toContain("Sahara means desert");
 
-    const chatReadGrant = await service.sendMessage(
+    const chatGrant = await service.sendMessage(
       agent.id,
       "grant read and write access to shared-status for 1 hour",
       context.userId,
       false,
       identity,
       "protected-data",
-      undefined,
-      context,
     );
-    await expect.poll(() => service.getRun(chatReadGrant.run.id).status).toBe("completed");
-    expect(service.getRun(chatReadGrant.run.id).output).toContain(
-      "I’m requesting read and write access to shared-status",
-    );
-    expect(service.getRun(chatReadGrant.run.id).output).toContain(
-      "Reply with your six-digit authenticator code",
+    await expect.poll(() => service.getRun(chatGrant.run.id).status).toBe("completed");
+    expect(service.getRun(chatGrant.run.id).output).toContain(
+      "Access can only be granted from Security & Policy",
     );
 
-    const chatReadVerification = await service.sendMessage(
-      agent.id,
-      "246810",
-      context.userId,
-      false,
-      identity,
-      "protected-data",
-      undefined,
-      context,
-    );
-    await expect.poll(() => service.getRun(chatReadVerification.run.id).status).toBe("completed");
-    expect(service.getRun(chatReadVerification.run.id).output).toContain(
-      "Read and write access to shared-status is enabled for 1 hour",
-    );
-    expect(
-      policyStore
-        .listApprovals(agent.principalId!)
-        .filter((approval) => approval.resourceKey === "shared-status")
-        .map((approval) => approval.action)
-        .sort(),
-    ).toEqual(["read", "write"]);
+    gateway.grantCapability(context, agent, {
+      resourceType: "mock_record",
+      resourceKey: "shared-status",
+      action: "read",
+      expiresInSeconds: 3_600,
+    });
+    gateway.grantCapability(context, agent, {
+      resourceType: "mock_record",
+      resourceKey: "shared-status",
+      action: "write",
+      expiresInSeconds: 3_600,
+    });
 
     const sharedRead = await service.sendMessage(
       agent.id,
@@ -357,40 +344,6 @@ describe("Agent lifecycle", () => {
     );
     await expect.poll(() => service.getRun(shortcut.run.id).status).toBe("completed");
     expect(service.getRun(shortcut.run.id).output).toContain("Sahara means desert");
-
-    const chatGrant = await service.sendMessage(
-      agent.id,
-      "grant write access to Alice's private notes for 1 hour",
-      context.userId,
-      false,
-      identity,
-      "protected-data",
-      undefined,
-      context,
-    );
-    await expect.poll(() => service.getRun(chatGrant.run.id).status).toBe("completed");
-    expect(service.getRun(chatGrant.run.id).output).toContain(
-      "Reply with your six-digit authenticator code",
-    );
-
-    const chatVerification = await service.sendMessage(
-      agent.id,
-      "246810",
-      context.userId,
-      false,
-      identity,
-      "protected-data",
-      undefined,
-      context,
-    );
-    await expect.poll(() => service.getRun(chatVerification.run.id).status).toBe("completed");
-    expect(service.getRun(chatVerification.run.id).output).toContain(
-      "Write access to alice-private-note is enabled for 1 hour",
-    );
-    expect(policyStore.listApprovals(agent.principalId!).at(0)).toMatchObject({
-      action: "write",
-      status: "approved",
-    });
 
     policyStore.close();
     authStore.close();

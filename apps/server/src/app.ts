@@ -20,10 +20,6 @@ const capabilityParams = z.object({
   id: z.string().uuid(),
   capabilityId: z.string().uuid(),
 });
-const approvalParams = z.object({
-  id: z.string().uuid(),
-  approvalId: z.string().uuid(),
-});
 const createAgentBody = z.object({
   name: z.string().trim().min(1).max(80),
   description: z.string().max(500).optional(),
@@ -377,7 +373,6 @@ export async function createApp(
             roleNames: request.auth.roleNames,
           }
         : undefined,
-      request.auth ?? undefined,
     );
     return reply.code(202).send(result);
   });
@@ -483,10 +478,7 @@ export async function createApp(
     const result = policyGateway.execute(request.auth, agent, body);
     if (!result.allowed) {
       return reply.code(403).send({
-        error:
-          result.status === "approval_required"
-            ? "Approval required"
-            : "Agent action denied",
+        error: "Agent action denied",
         ...result,
       });
     }
@@ -502,57 +494,11 @@ export async function createApp(
     const result = policyGateway.executeAsAgent(request.agentAuth, agent, body);
     if (!result.allowed) {
       return reply.code(403).send({
-        error:
-          result.status === "approval_required"
-            ? "Approval required"
-            : "Agent action denied",
+        error: "Agent action denied",
         ...result,
       });
     }
     return result;
-  });
-
-  app.get("/api/agents/:id/approvals", async (request, reply) => {
-    const { id } = agentIdParams.parse(request.params);
-    if (!requirePermission(request, reply, authStore, "view", "agent", id)) return;
-    if (!policyGateway || !request.auth) {
-      return reply.code(503).send({ error: "Agent policy is not configured" });
-    }
-    const access = agentAccess(request, authStore);
-    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
-    return { approvals: policyGateway.listApprovals(agent) };
-  });
-
-  app.post("/api/agents/:id/approvals/:approvalId/approve", async (request, reply) => {
-    const { id, approvalId } = approvalParams.parse(request.params);
-    if (!policyGateway || !request.auth) {
-      return reply.code(503).send({ error: "Agent policy is not configured" });
-    }
-    const access = agentAccess(request, authStore);
-    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
-    const approval = policyGateway.decideApproval(
-      request.auth,
-      agent,
-      approvalId,
-      "approved",
-    );
-    return { approval };
-  });
-
-  app.post("/api/agents/:id/approvals/:approvalId/deny", async (request, reply) => {
-    const { id, approvalId } = approvalParams.parse(request.params);
-    if (!policyGateway || !request.auth) {
-      return reply.code(503).send({ error: "Agent policy is not configured" });
-    }
-    const access = agentAccess(request, authStore);
-    const agent = service.getAgent(id, access.ownerUserId, access.includeAll);
-    const approval = policyGateway.decideApproval(
-      request.auth,
-      agent,
-      approvalId,
-      "denied",
-    );
-    return { approval };
   });
 
   app.get("/api/agents/:id/action-logs", async (request, reply) => {

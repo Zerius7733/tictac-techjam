@@ -1,47 +1,49 @@
 # Multi-agent/auth integration seam
 
 This note complements [MIDDLEWARE_DATABASE_SCHEMA.md](../MIDDLEWARE_DATABASE_SCHEMA.md),
-which is the repository’s SQLite design reference for authentication and
-orchestration. The executable orchestration migration is
-[002_multi_agent_orchestration.sql](../db/migrations/002_multi_agent_orchestration.sql).
-The executable authentication migration is
-[001_authentication.sql](../db/migrations/001_authentication.sql).
-The independent Agent identity migration is
-[003_agent_principals.sql](../db/migrations/003_agent_principals.sql).
-Delegated policy is defined by
-[004_agent_policy.sql](../db/migrations/004_agent_policy.sql), and independent
-runtime credentials by
-[005_agent_credentials.sql](../db/migrations/005_agent_credentials.sql).
-Write delegation verification is defined by
-[006_authenticator_codes.sql](../db/migrations/006_authenticator_codes.sql).
-The upgrade that invalidates pre-authenticator capabilities is defined by
-[007_authenticator_capability_enforcement.sql](../db/migrations/007_authenticator_capability_enforcement.sql).
+the repository's SQLite design reference for authentication and orchestration.
+
+The current executable migrations are:
+
+- [001_authentication.sql](../db/migrations/001_authentication.sql): users,
+  roles, permissions, sessions, and base audit records;
+- [002_multi_agent_orchestration.sql](../db/migrations/002_multi_agent_orchestration.sql):
+  orchestration tables;
+- [003_agent_principals.sql](../db/migrations/003_agent_principals.sql): one
+  independent identity per Agent;
+- [004_agent_policy.sql](../db/migrations/004_agent_policy.sql): capabilities
+  and protected mock resources;
+- [005_agent_credentials.sql](../db/migrations/005_agent_credentials.sql):
+  hashed, revocable Agent credentials; and
+- [008_remove_unused_approval_authenticator.sql](../db/migrations/008_remove_unused_approval_authenticator.sql):
+  removes the retired chat-approval and development-authenticator tables from
+  existing databases.
+
+Migrations 006 and 007 are historical files only. They are not loaded by the
+current application.
 
 ## Ownership boundary
 
-The authentication side owns:
+The authentication/policy side owns:
 
-- `users`, including active/inactive state;
-- `roles`, `user_roles`, and `permissions`;
+- `users`, `roles`, `user_roles`, and `permissions`;
 - `auth_sessions`;
-- `agent_principals` and `agent_principal_credentials`, which give each Agent
-  an independent identity and revocable runtime credential;
-- `agent_capabilities`, `mock_resources`, `agent_approval_requests`, and
-  `agent_action_logs`, which implement delegated policy and attribution; and
-- the base `audit_logs` record for each request and authorization decision.
+- `agent_principals` and `agent_principal_credentials`;
+- `agent_capabilities` and `mock_resources`;
+- `agent_action_logs`; and
+- the base `audit_logs` records for human and Agent decisions.
 
 The multi-agent side owns:
 
 - `agents` as non-human execution principals;
-- `orchestration_jobs` as the top-level user request;
-- `agent_runs` as each Agent attempt, including delegated child runs;
+- `orchestration_jobs` as top-level user requests;
+- `agent_runs` as Agent attempts, including delegated child runs;
 - `agent_messages` as the ordered conversation/event stream; and
-- `audit_agent_context` as the bridge from an auth audit row to the Agent and
-  run that performed the action.
+- `audit_agent_context` as the bridge from an audit row to the Agent and run
+  that performed the action.
 
-The bridge is intentionally a separate table. The auth contributor can keep
-the stable `audit_logs` contract while the orchestration contributor records
-Agent-specific context without copying authentication logic.
+The bridge is intentionally separate. The orchestration contributor can record
+Agent-specific execution context without copying authentication or policy logic.
 
 ## Identity and actor rules
 
@@ -56,146 +58,92 @@ audit_agent_context.agent_id            Agent involved in the audited action
 audit_agent_context.run_id              concrete execution evidence
 ```
 
-An Agent is therefore a separate principal even when its
-`owner_user_id` equals the caller. Multiple Agents may belong to one user, and
-one Agent may be shared with multiple users through future membership or
-delegation tables without changing run history.
+An Agent is a separate principal even when its `owner_user_id` equals the
+caller. The Agent never reuses the human session as its runtime credential.
 
 ## Authorization flow
 
-1. Auth middleware validates the bearer session and produces an in-memory
-   context containing `userId`, role names, and `requestId`.
-2. Auth resolves the requested permission using the exact-to-wildcard rules in
-   the main schema document. A missing rule is deny.
-3. Auth writes `audit_logs` with the human `user_id`, action, resource, and
-   allow/deny decision.
-4. The Agent service performs the object-level check: the requested Agent is
-   active, and `owner_user_id` or a future delegation/membership rule allows
-   the authenticated user to invoke it.
-5. For a permitted Agent action, the service inserts `audit_agent_context`
-   using the new audit row’s id and the executing `agent_id`/`run_id`.
-6. Only then does the service queue the run or invoke the runtime.
+1. Auth middleware validates the human bearer session and creates an in-memory
+   context containing the user, roles, and request ID.
+2. Auth resolves role permission using the exact-to-wildcard rules in the main
+   schema document. A missing rule is deny.
+3. Auth writes an `audit_logs` row with the human, action, resource, and result.
+4. The Agent service verifies that the caller can access the requested Agent
+   and that the Agent belongs to that user.
+5. The human opens **Security & Policy** and grants one exact Agent capability
+   for one resource and one action, such as `read` on `alice-private-note`.
+   Read and write are granted separately and default to one hour.
+6. The Agent runtime sends `X-Agent-Principal-Token` to the policy gateway.
+7. The gateway verifies the Agent credential, Agent status, private-resource
+   ownership, exact capability, expiration, and revocation state.
+8. The gateway performs the read/write only when every check succeeds and
+   records both Agent action and base audit evidence.
 
-For a tool call made by the runtime itself, the Agent sends its
-`X-Agent-Principal-Token` to the policy gateway. The gateway validates the
-credential, checks the exact capability and private-resource owner, and allows
-the action only when the Agent has an active exact capability. Read and write
-capabilities are created only after a pending human request is verified by the
-signed-in user's six-digit development authenticator code. The human session
-that issued the credential is not silently treated as an unrestricted Agent
-session.
+The chat is an execution surface, not a delegation surface. A leading `/data`
+command or `Protected data` mode only routes a request to the policy gateway;
+it cannot create capabilities. Grant requests in chat receive guidance to use
+Security & Policy instead.
 
-## Protected records from the Agent chat
+## Protected records from Agent chat
 
-The playground conversation is connected to the same boundary for the demo
-resources. After Alice issues a credential, she can select `Protected data`
-above the chat composer and type:
+After issuing a credential and granting access in **Security & Policy**, Alice
+can select **Protected data** and type:
 
 ```text
-Grant read access to Alice's private notes for 1 hour
+read Alice's private notes
+write into Alice's private notes, changing it to Sahara means desert
 ```
 
-After replying with the six-digit authenticator code, she can type:
+The server translates these explicit demo-resource requests into protected tool
+calls. It authenticates the Agent credential and calls the policy gateway before
+returning a record value or changing a record. Without a credential, capability,
+ownership match, or valid expiration, the chat shows the policy denial. Ordinary
+coding prompts continue through the normal Agent runner.
 
-```text
-Read Alice's private notes
-```
+## Integration contract
 
-The server recognizes this explicit demo-resource request, authenticates the
-`X-Agent-Principal-Token` kept in the current browser tab, and calls
-`executeAsAgent` before returning any record value. The chat shows the policy
-result and the value only when the Agent is active and the exact capability is
-valid. Without a credential, without a capability, after expiry, or after
-revocation, the chat shows a denial instead. Ordinary coding prompts continue
-through the normal Codex runner. The chat also accepts `/data` at the start of
-a message as a shortcut. The mode/command is only a routing signal; it never
-grants access by itself. Typing `/data` by itself switches the UI into
-protected-data mode without sending a request.
-
-This is intentionally a small adapter for the hackathon proof. A production
-version would replace the phrase matcher with the runtime's typed tool/MCP
-transport, while keeping the policy gateway and database contract unchanged.
-
-For write delegation, the same protected chat accepts `grant write access to
-Alice's private notes for 1 hour`, then verifies the six-digit code in the
-backend. The code is never forwarded to the Agent model and only its hash is
-stored. The Security & Policy panel shows both read and write approval
-history.
-
-The browser must never be allowed to choose `user_id`, `owner_user_id`, or the
-Agent identity used for authorization. Those values come from the validated
-session and the server-side Agent lookup.
-
-## Multi-agent lifecycle
-
-Create the root request atomically:
-
-```text
-orchestration_jobs(status = queued, user_id = authenticated user)
-agent_runs(status = queued, agent_id = selected Agent)
-agent_messages(message_type = prompt, sender_kind = user)
-```
-
-When the Agent delegates, add a child `agent_runs` row with the parent
-`parent_run_id`, and append a `delegation` message under the same `job_id`.
-All child Agents remain separately identifiable in `agent_runs.agent_id`.
-
-On completion, update the run and append a `result` or `error` message in the
-same transaction. A run may be `queued`, `running`, `completed`, `failed`, or
-`cancelled`; the partial unique index prevents two active runs for one Agent,
-preserving the current service invariant.
-
-## Auth module contract
-
-The multi-agent service only needs this stable interface from authentication:
+The auth/policy contributor should expose these concepts to the orchestration
+contributor:
 
 ```ts
-type AuthContext = {
+type AgentRuntimeIdentity = {
+  credentialId: string;
+  principalId: string;
+  agentId: string;
+  ownerUserId: string;
   requestId: string;
-  userId: string;
-  roleNames: string[];
 };
 
-type Authorization = {
-  allowed: boolean;
-  reasonCode: string;
-  auditLogId: string;
+type ToolCallRequest = {
+  action: "read" | "write";
+  resourceType: string;
+  resourceKey: string;
+  inputText?: string;
 };
-
-authorize(
-  context: AuthContext,
-  action: string,
-  resourceType: 'agent' | 'run' | 'orchestration' | 'system',
-  resourceKey: string,
-): Promise<Authorization>;
 ```
 
-The `auditLogId` lets the orchestration side insert `audit_agent_context`
-without taking ownership of roles, sessions, password verification, or
-permission precedence.
+The orchestration layer must not infer permissions from the UI, Agent name,
+prompt text, or human role. It should send the typed action/resource request to
+the trusted policy gateway and use the returned decision.
 
-The current policy gateway adds this boundary:
+## Current API expectations
 
-```text
-issue Agent credential -> authenticate Agent principal -> check capability
-                                      |
-                                      +--> read -> execute
-                                      |
-                                      +--> read/write capability request
-                                            -> authenticator verification
-                                            -> one-hour capability -> execute
-```
+| Route | Purpose |
+| --- | --- |
+| `POST /api/auth/login` | Create a human session |
+| `GET /api/auth/me` | Identify the signed-in human |
+| `GET /api/agents` | List only Agents visible to the human |
+| `POST /api/agents/:id/credentials` | Issue the Agent's separate credential |
+| `POST /api/agents/:id/capabilities` | Directly grant one exact read/write capability from Security & Policy |
+| `POST /api/agent/tool-calls` | Execute a protected action using the Agent credential |
+| `POST /api/agents/:id/capabilities/:capabilityId/revoke` | Revoke one capability immediately |
+| `POST /api/agents/:id/credentials/:credentialId/revoke` | Revoke the Agent credential immediately |
+| `GET /api/agents/:id/action-logs` | Inspect Agent decisions and attribution |
 
-The orchestration service should call the gateway for tool/resource actions;
-it should not read `agent_capabilities` directly or implement a second role
-resolver.
+## Deliberate scope
 
-## Migration order
-
-Apply the migrations in order: authentication (`001`), orchestration (`002`),
-independent Agent identities (`003`), delegated policy (`004`), Agent
-credentials (`005`), and authenticator codes (`006`). In the current POC, `003` through `006` can also be
-applied to the auth-only database because Agent metadata is still stored in
-JSON; the final combined database should add the `agent_id` foreign key once
-the SQLite `agents` table becomes authoritative. Do not create a second
-`users` table inside the Agent module.
+This is a small hackathon adapter. It intentionally does not add OAuth, JWT
+complexity, a policy language, or multiple services. The important proof is the
+trusted backend boundary: Alice can grant her Agent a narrow capability, the
+Agent can use exactly that capability, Bob's resource stays isolated, and
+revocation affects the next request immediately.

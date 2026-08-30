@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  parseAuthenticatorCode,
-  parseProtectedCapabilityGrantIntent,
+  isProtectedCapabilityGrantRequest,
   parseProtectedResourceIntent,
 } from "./protected-resource-intent.js";
 
@@ -49,36 +48,10 @@ describe("protected resource intent", () => {
     ).toBeNull();
   });
 
-  it("recognizes one-hour capability requests and six-digit codes", () => {
-    expect(parseProtectedCapabilityGrantIntent(
-      "grant write access to Alice's private notes for 1 hour",
-    )).toEqual({
-      kind: "grant-capability",
-      resourceType: "mock_record",
-      resourceKey: "alice-private-note",
-      actions: ["write"],
-      expiresInSeconds: 3_600,
-    });
-    expect(parseProtectedCapabilityGrantIntent(
-      "grant read access to shared-status for 1 hour",
-    )).toEqual({
-      kind: "grant-capability",
-      resourceType: "mock_record",
-      resourceKey: "shared-status",
-      actions: ["read"],
-      expiresInSeconds: 3_600,
-    });
-    expect(parseProtectedCapabilityGrantIntent(
-      "grant read and write access to Alice's private notes for 1 hour",
-    )).toEqual({
-      kind: "grant-capability",
-      resourceType: "mock_record",
-      resourceKey: "alice-private-note",
-      actions: ["read", "write"],
-      expiresInSeconds: 3_600,
-    });
-    expect(parseAuthenticatorCode("246810")).toBe("246810");
-    expect(parseAuthenticatorCode("authenticator code: 246810")).toBe("246810");
-    expect(parseAuthenticatorCode("24681")).toBeNull();
+  it("does not treat chat as a capability-grant surface", () => {
+    const prompt = "grant read and write access to Alice's private notes for 1 hour";
+    expect(isProtectedCapabilityGrantRequest(prompt)).toBe(true);
+    expect(parseProtectedResourceIntent(prompt)).toBeNull();
+    expect(parseProtectedResourceIntent("123456")).toBeNull();
   });
 });
