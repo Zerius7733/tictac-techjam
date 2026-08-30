@@ -25,6 +25,12 @@ export interface Authorizer {
   ): Promise<AuthorizationDecision>;
 }
 
+export interface OrchestrationLogger {
+  info(fields: Record<string, unknown>, message: string): void;
+  warn(fields: Record<string, unknown>, message: string): void;
+  error(fields: Record<string, unknown>, message: string): void;
+}
+
 export type OrchestrationJobStatus =
   | "queued"
   | "running"
@@ -32,7 +38,11 @@ export type OrchestrationJobStatus =
   | "failed"
   | "cancelled";
 
-export type OrchestrationRunStatus = OrchestrationJobStatus;
+/**
+ * A run can pause while a delegated child or protected-resource request is
+ * being resolved. Jobs do not enter this state; they remain running.
+ */
+export type OrchestrationRunStatus = OrchestrationJobStatus | "waiting";
 
 export type OrchestrationMessageRole =
   | "user"
@@ -141,9 +151,35 @@ export interface AppendMessageInput {
   createdAt?: string;
 }
 
+export interface LinkAuditAgentContextInput {
+  auditId: string;
+  agentId: string;
+  runId?: string | null;
+  createdAt?: string;
+}
+
+export interface AuditAgentContext {
+  auditId: string;
+  agentId: string;
+  runId: string | null;
+  createdAt: string;
+}
+
 export interface StartRunInput {
   runId: string;
   startedAt?: string;
+}
+
+export interface WaitRunInput {
+  runId: string;
+  /** Persist the latest thread before the run yields to child work. */
+  codexThreadId?: string | null;
+  /** Accumulated usage through the turn that yielded. */
+  usage?: RunUsage | null;
+}
+
+export interface ResumeRunInput {
+  runId: string;
 }
 
 export interface CompleteRunInput {
@@ -159,6 +195,23 @@ export interface FailRunInput {
   runId: string;
   errorText: string;
   completedAt?: string;
+}
+
+export interface CancelRunInput {
+  runId: string;
+  reason?: string;
+  cancelledAt?: string;
+}
+
+export interface CancelJobInput {
+  jobId: string;
+  reason?: string;
+  cancelledAt?: string;
+}
+
+export interface RestartReconciliationResult {
+  cancelledJobIds: string[];
+  cancelledRunIds: string[];
 }
 
 export interface CompleteJobInput {
@@ -180,11 +233,19 @@ export interface OrchestrationRepository {
     message: OrchestrationMessage;
   }>;
   appendMessage(input: AppendMessageInput): Promise<OrchestrationMessage>;
+  linkAuditAgentContext(input: LinkAuditAgentContextInput): Promise<AuditAgentContext>;
+  getAuditAgentContext(auditId: string): AuditAgentContext | null;
   startRun(input: StartRunInput): Promise<OrchestrationRun>;
+  waitRun(input: WaitRunInput): Promise<OrchestrationRun>;
+  resumeRun(input: ResumeRunInput): Promise<OrchestrationRun>;
   completeRun(input: CompleteRunInput): Promise<OrchestrationRun>;
   failRun(input: FailRunInput): Promise<OrchestrationRun>;
+  cancelRun(input: CancelRunInput): Promise<OrchestrationRun>;
+  cancelJob(input: CancelJobInput): Promise<OrchestrationJob>;
+  reconcileAfterRestart(): Promise<RestartReconciliationResult>;
   completeJob(input: CompleteJobInput): Promise<OrchestrationJob>;
   getJob(jobId: string): OrchestrationJob | null;
+  listJobs(status?: OrchestrationJobStatus): OrchestrationJob[];
   getRun(runId: string): OrchestrationRun | null;
   listRuns(jobId: string): OrchestrationRun[];
   listMessages(jobId: string): OrchestrationMessage[];

@@ -13,6 +13,18 @@ import { AuthStore } from "./auth-store.js";
 import type { AppConfig } from "./config.js";
 import { HttpError } from "./errors.js";
 import type { AgentService } from "./agent-service.js";
+import type {
+  AuthContext as OrchestrationAuthContext,
+  Authorizer,
+  OrchestrationJob,
+  OrchestrationMessage,
+  OrchestrationRepository,
+  OrchestrationRun,
+} from "./orchestration-contracts.js";
+import type {
+  OrchestrationAgentDirectory,
+  OrchestrationDispatcher,
+} from "./orchestration-dispatcher.js";
 
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
@@ -37,6 +49,14 @@ const loginBody = z.object({
   username: z.string().trim().min(1).max(120),
   password: z.string().min(1).max(256),
 });
+const orchestrationBody = z.object({
+  agentId: z.string().uuid(),
+  prompt: z.string().trim().min(1).max(50_000),
+});
+const orchestrationIdParams = z.object({ id: z.string().uuid() });
+const orchestrationCancelBody = z.object({
+  reason: z.string().trim().min(1).max(160).optional(),
+});
 const capabilityBody = z.object({
   resourceType: z.string().trim().min(1).max(80),
   resourceKey: z.string().trim().min(1).max(160),
@@ -57,7 +77,14 @@ const credentialBody = z.object({
   expiresInSeconds: z.number().int().min(60).max(86_400).default(3_600),
 });
 
-type ResourceType = "agent" | "run" | "orchestration" | "system";
+type ResourceType = "agent" | "run" | "orchestration" | "system" | "data_asset";
+
+export interface OrchestrationHttpDependencies {
+  repository: OrchestrationRepository;
+  dispatcher: OrchestrationDispatcher;
+  agents: OrchestrationAgentDirectory;
+  authorizer: Authorizer;
+}
 
 function requestPath(request: FastifyRequest): string {
   return request.url.split("?", 1)[0] ?? request.url;
@@ -138,12 +165,119 @@ function requirePermission(
   return true;
 }
 
+function orchestrationContext(request: FastifyRequest): OrchestrationAuthContext {
+  return request.auth
+    ? {
+        requestId: request.auth.requestId,
+        userId: request.auth.userId,
+        roleNames: request.auth.roleNames,
+      }
+    : { requestId: request.id, userId: "anonymous", roleNames: [] };
+}
+
+function isAdmin(request: FastifyRequest): boolean {
+  return request.auth?.roleNames.some((role) => role.toLowerCase() === "admin") ?? false;
+}
+
+function ownsJob(job: OrchestrationJob, request: FastifyRequest): boolean {
+  if (!authEnabled(request)) return true;
+  return isAdmin(request) || job.userId === request.auth?.userId;
+}
+
+function authEnabled(request: FastifyRequest): boolean {
+  return Boolean(request.auth);
+}
+
+function publicRun(run: OrchestrationRun) {
+  return {
+    id: run.id,
+    jobId: run.jobId,
+    agentId: run.agentId,
+    parentRunId: run.parentRunId,
+    attempt: run.attempt,
+    status: run.status,
+    outputText: run.outputText,
+    errorText: run.errorText,
+    createdAt: run.createdAt,
+    startedAt: run.startedAt,
+    completedAt: run.completedAt,
+  };
+}
+
+function publicMessage(message: OrchestrationMessage) {
+  return {
+    id: message.id,
+    jobId: message.jobId,
+    runId: message.runId,
+    sequenceNo: message.sequenceNo,
+    role: message.role,
+    senderKind: message.senderKind,
+    senderKey: message.senderKey,
+    recipientKind: message.recipientKind,
+    recipientKey: message.recipientKey,
+    messageType: message.messageType,
+    content: message.content,
+    createdAt: message.createdAt,
+  };
+}
+
+async function requireOrchestrationPermission(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  authStore: AuthStore | undefined,
+  orchestration: OrchestrationHttpDependencies | undefined,
+  action: string,
+  resourceType: string,
+  resourceKey: string,
+): Promise<boolean> {
+  if (!authStore) return true;
+  if (!request.auth) {
+    await reply.code(401).send({ error: "Authentication required" });
+    return false;
+  }
+  const decision = orchestration
+    ? await orchestration.authorizer.authorize(
+        orchestrationContext(request),
+        action,
+        resourceType,
+        resourceKey,
+      )
+    : authStore.authorize(
+        request.auth,
+        action,
+        resourceType as ResourceType,
+        resourceKey,
+      );
+  if (!decision.allowed) {
+    await reply.code(403).send({
+      error: "Forbidden",
+      reasonCode: decision.reasonCode,
+      requestId: request.id,
+    });
+    return false;
+  }
+  return true;
+}
+
 export async function createApp(
   config: AppConfig,
   service: AgentService,
   authStore?: AuthStore,
-  policyGateway?: AgentPolicyGateway,
+  orchestrationOrPolicy?: OrchestrationHttpDependencies | AgentPolicyGateway,
+  policyGatewayArg?: AgentPolicyGateway,
 ): Promise<FastifyInstance> {
+  const orchestration =
+    orchestrationOrPolicy && "repository" in orchestrationOrPolicy
+      ? orchestrationOrPolicy
+      : undefined;
+  // Keep the four-argument policy-only form used by the authorization
+  // boundary tests and older callers, while allowing the integrated server
+  // to pass both orchestration and policy dependencies.
+  const policyGateway =
+    policyGatewayArg ??
+    (orchestrationOrPolicy instanceof AgentPolicyGateway
+      ? orchestrationOrPolicy
+      : undefined);
   const app = Fastify({
     logger: {
       level: config.logLevel,
@@ -382,6 +516,122 @@ export async function createApp(
     if (!requirePermission(request, reply, authStore, "view", "run", id)) return;
     const access = agentAccess(request, authStore);
     return { run: service.getRun(id, access.ownerUserId, access.includeAll) };
+  });
+
+  app.post("/api/orchestrations", async (request, reply) => {
+    if (!orchestration) {
+      return reply.code(503).send({ error: "Orchestration is not configured" });
+    }
+    if (
+      !(await requireOrchestrationPermission(
+        request,
+        reply,
+        authStore,
+        orchestration,
+        "create",
+        "orchestration",
+        "*",
+      ))
+    ) {
+      return;
+    }
+    const body = orchestrationBody.parse(request.body);
+    const agent = orchestration.agents.getAgentById(body.agentId);
+    if (!agent) return reply.code(404).send({ error: "Agent not found" });
+    if (agent.status !== "ready") {
+      return reply.code(409).send({ error: "Agent is not ready" });
+    }
+    if (
+      !(await requireOrchestrationPermission(
+        request,
+        reply,
+        authStore,
+        orchestration,
+        "invoke",
+        "agent",
+        agent.agentKey,
+      ))
+    ) {
+      return;
+    }
+    const context = orchestrationContext(request);
+    let created: Awaited<ReturnType<OrchestrationRepository["createRootJob"]>>;
+    try {
+      created = await orchestration.repository.createRootJob({
+        requestId: context.requestId,
+        userId: authStore ? context.userId : null,
+        inputText: body.prompt,
+        agentId: body.agentId,
+        prompt: body.prompt,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message === "Agent is not ready" || message === "Agent already has an active run") {
+        return reply.code(409).send({ error: message });
+      }
+      throw error;
+    }
+    void orchestration.dispatcher
+      .dispatchRoot({
+        jobId: created.job.id,
+        rootRunId: created.run.id,
+        authContext: context,
+      })
+      .catch((error) => {
+        request.log.error(
+          { jobId: created.job.id, error: error instanceof Error ? error.message : String(error) },
+          "orchestration_dispatch_unhandled_error",
+        );
+      });
+    return reply.code(202).send({
+      requestId: context.requestId,
+      job: created.job,
+      run: publicRun(created.run),
+      message: publicMessage(created.message),
+    });
+  });
+
+  app.get("/api/orchestrations/:id", async (request, reply) => {
+    if (!orchestration) {
+      return reply.code(503).send({ error: "Orchestration is not configured" });
+    }
+    const { id } = orchestrationIdParams.parse(request.params);
+    const job = orchestration.repository.getJob(id);
+    if (!job) return reply.code(404).send({ error: "Orchestration not found" });
+    if (!(await requireOrchestrationPermission(request, reply, authStore, orchestration, "view", "orchestration", id))) return;
+    if (!ownsJob(job, request)) return reply.code(404).send({ error: "Orchestration not found" });
+    return {
+      job,
+      runs: orchestration.repository.listRuns(job.id).map(publicRun),
+    };
+  });
+
+  app.get("/api/orchestrations/:id/messages", async (request, reply) => {
+    if (!orchestration) {
+      return reply.code(503).send({ error: "Orchestration is not configured" });
+    }
+    const { id } = orchestrationIdParams.parse(request.params);
+    const job = orchestration.repository.getJob(id);
+    if (!job) return reply.code(404).send({ error: "Orchestration not found" });
+    if (!(await requireOrchestrationPermission(request, reply, authStore, orchestration, "view", "orchestration", id))) return;
+    if (!ownsJob(job, request)) return reply.code(404).send({ error: "Orchestration not found" });
+    return {
+      messages: orchestration.repository.listMessages(job.id).map(publicMessage),
+    };
+  });
+
+  app.post("/api/orchestrations/:id/cancel", async (request, reply) => {
+    if (!orchestration) {
+      return reply.code(503).send({ error: "Orchestration is not configured" });
+    }
+    const { id } = orchestrationIdParams.parse(request.params);
+    const job = orchestration.repository.getJob(id);
+    if (!job) return reply.code(404).send({ error: "Orchestration not found" });
+    if (!(await requireOrchestrationPermission(request, reply, authStore, orchestration, "cancel", "orchestration", id))) return;
+    if (!ownsJob(job, request)) return reply.code(404).send({ error: "Orchestration not found" });
+    const body = orchestrationCancelBody.parse(request.body ?? {});
+    const cancelled = await orchestration.dispatcher.cancelJob(id, body.reason);
+    return { job: cancelled };
   });
 
   app.get("/api/security/mock-resources", async (request, reply) => {

@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { AgentStore } from "./agent-store.js";
 import type { Database } from "./types.js";
 
 const emptyDatabase = (): Database => ({
@@ -9,7 +10,7 @@ const emptyDatabase = (): Database => ({
   runs: [],
 });
 
-export class JsonStore {
+export class JsonStore implements AgentStore {
   private data: Database = emptyDatabase();
   private queue: Promise<void> = Promise.resolve();
 
@@ -31,6 +32,10 @@ export class JsonStore {
           ...agent,
           ownerUserId: agent.ownerUserId ?? null,
           principalId: agent.principalId ?? null,
+        })),
+        runs: parsed.runs.map((run) => ({
+          ...run,
+          codexThreadId: run.codexThreadId ?? null,
         })),
       };
     } catch (error) {

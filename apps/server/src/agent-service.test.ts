@@ -134,6 +134,20 @@ describe("Agent lifecycle", () => {
     expect(service.listAgents()).toHaveLength(0);
   });
 
+  it("archives an Agent without deleting its conversation history", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "Historical" });
+    const { run } = await service.sendMessage(agent.id, "preserve this");
+    await expect.poll(() => service.getRun(run.id).status).toBe("completed");
+
+    await service.deleteAgent(agent.id);
+
+    expect(service.listAgents()).toHaveLength(0);
+    expect(service.getAgent(agent.id).status).toBe("archived");
+    expect(service.getRuns(agent.id)).toHaveLength(1);
+    expect(service.getMessages(agent.id)).toHaveLength(2);
+  });
+
   it("persists a playground conversation", async () => {
     const service = await makeService();
     const agent = await service.createAgent({ name: "Coder" });
@@ -143,6 +157,37 @@ describe("Agent lifecycle", () => {
     expect(messages.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(messages[1]?.content).toContain("write hello world");
     expect(service.getAgent(agent.id).codexThreadId).toBe("fake-thread");
+  });
+
+  it("does not inherit the legacy Agent thread across runs", async () => {
+    const requests: RunnerRequest[] = [];
+    const service = await makeService({
+      run: async (request) => {
+        requests.push(request);
+        return {
+          output: "done",
+          threadId: requests.length === 1 ? "thread-one" : "thread-two",
+          usage: null,
+        };
+      },
+      cancel: async () => false,
+      isAvailable: async () => true,
+    });
+    const agent = await service.createAgent({ name: "Isolated" });
+
+    const first = await service.sendMessage(agent.id, "first");
+    await expect.poll(() => service.getRun(first.run.id).status).toBe("completed");
+    const second = await service.sendMessage(agent.id, "second");
+    await expect.poll(() => service.getRun(second.run.id).status).toBe("completed");
+
+    expect(requests.map((request) => request.threadId)).toEqual([null, null]);
+    expect(requests.map((request) => request.runId)).toEqual([
+      first.run.id,
+      second.run.id,
+    ]);
+    expect(service.getRun(first.run.id).codexThreadId).toBe("thread-one");
+    expect(service.getRun(second.run.id).codexThreadId).toBe("thread-two");
+    expect(service.getAgent(agent.id).codexThreadId).toBe("thread-two");
   });
 
   it("does not infer protected data access from an ordinary Agent prompt", async () => {

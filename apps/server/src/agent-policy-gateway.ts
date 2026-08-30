@@ -68,6 +68,7 @@ export class AgentPolicyGateway {
     this.requireAgentPermission(context, agent, "delegate");
     const principal = this.requirePrincipal(agent);
     this.requireOwner(context, agent);
+    this.requireSupportedDataAssetAction(input.resourceType, input.action);
     const resource = this.requireResource(input.resourceType, input.resourceKey);
     this.requireResourceOwner(context, resource);
     return this.policyStore.grantCapability({
@@ -114,10 +115,27 @@ export class AgentPolicyGateway {
       "agent",
       agent.id,
     );
+    const resourceDecision =
+      input.resourceType === "data_asset"
+        ? this.authStore.authorize(
+            context,
+            input.action,
+            "data_asset",
+            input.resourceKey,
+          )
+        : null;
     const principal = this.getPrincipal(agent);
 
     if (!humanDecision.allowed) {
       return this.denied(principal, input, humanDecision.auditLogId, "human_permission_denied");
+    }
+    if (resourceDecision && !resourceDecision.allowed) {
+      return this.denied(
+        principal,
+        input,
+        resourceDecision.auditLogId,
+        resourceDecision.reasonCode,
+      );
     }
     if (!principal || principal.status !== "active") {
       return this.denied(
@@ -201,6 +219,14 @@ export class AgentPolicyGateway {
     input: ToolCallRequest,
     auditLogIdFor: (decision: "allow" | "deny", reasonCode: string) => string,
   ): AgentPolicyDecision {
+    if (input.resourceType === "data_asset" && input.action === "write") {
+      return this.denied(
+        principal,
+        input,
+        auditLogIdFor("deny", "resource_read_only"),
+        "resource_read_only",
+      );
+    }
 
     const resource = this.policyStore.getMockResource(
       input.resourceType,
@@ -340,8 +366,17 @@ export class AgentPolicyGateway {
 
   private requireResource(resourceType: string, resourceKey: string): MockResource {
     const resource = this.policyStore.getMockResource(resourceType, resourceKey);
-    if (!resource) throw new HttpError(404, "Mock resource not found");
+    if (!resource) throw new HttpError(404, "Protected resource not found");
     return resource;
+  }
+
+  private requireSupportedDataAssetAction(
+    resourceType: string,
+    action: PolicyAction,
+  ): void {
+    if (resourceType === "data_asset" && action !== "read") {
+      throw new HttpError(400, "Data assets are read-only");
+    }
   }
 
   private requireResourceOwner(context: AuthContext, resource: MockResource): void {

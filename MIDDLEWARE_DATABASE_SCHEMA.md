@@ -137,8 +137,9 @@ conventions:
 The API and database must use the same lowercase values:
 
 ```text
-Agent:   ready | busy | stopped | error
-Job/run: queued | running | completed | failed | cancelled
+Agent:   ready | busy | stopped | error | archived
+Job:     queued | running | completed | failed | cancelled
+Run:     queued | running | waiting | completed | failed | cancelled
 Decision: allow | deny
 ```
 
@@ -434,7 +435,7 @@ child runs through `parent_run_id`.
 | `agent_id` | `TEXT` | Not null, foreign key to `agents.id` | Agent being run |
 | `parent_run_id` | `TEXT` | Nullable, self-foreign key with `ON DELETE SET NULL` | Delegating run, if any |
 | `attempt` | `INTEGER` | Not null, default `1`, greater than zero | Retry attempt number |
-| `status` | `TEXT` | Not null, default `queued` | Run lifecycle state |
+| `status` | `TEXT` | Not null, default `queued` | Run lifecycle state; `waiting` pauses a run while its delegated child/resource request is resolved |
 | `prompt` | `TEXT` | Not null | Prompt/input given to the agent |
 | `input_json` | `TEXT` | Not null, default `{}` | Structured execution options |
 | `output_text` | `TEXT` | Nullable | Agent result |
@@ -449,7 +450,7 @@ child runs through `parent_run_id`.
 | `completed_at` | `TEXT` | Nullable | Terminal-state time |
 
 The partial unique index below enforces the current project invariant that an
-agent has at most one queued or running execution at a time.
+agent has at most one queued, running, or waiting execution at a time.
 
 ### 5.11 `agent_messages`
 
@@ -570,7 +571,7 @@ CREATE TABLE IF NOT EXISTS agents (
     workspace_path   TEXT NOT NULL,
     codex_thread_id  TEXT,
     status           TEXT NOT NULL DEFAULT 'ready' CHECK (
-        status IN ('ready', 'busy', 'stopped', 'error')
+        status IN ('ready', 'busy', 'stopped', 'error', 'archived')
     ),
     last_error       TEXT,
     config_json      TEXT NOT NULL DEFAULT '{}',
@@ -678,7 +679,7 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     parent_run_id        TEXT,
     attempt              INTEGER NOT NULL DEFAULT 1 CHECK (attempt > 0),
     status               TEXT NOT NULL DEFAULT 'queued' CHECK (
-        status IN ('queued', 'running', 'completed', 'failed', 'cancelled')
+        status IN ('queued', 'running', 'waiting', 'completed', 'failed', 'cancelled')
     ),
     prompt               TEXT NOT NULL,
     input_json           TEXT NOT NULL DEFAULT '{}',
@@ -811,7 +812,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_run_time
 -- Matches the current single-node invariant: one active execution per agent.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_run_per_agent
     ON agent_runs (agent_id)
-    WHERE status IN ('queued', 'running');
+    WHERE status IN ('queued', 'running', 'waiting');
 ```
 
 ## 8. Seed examples
@@ -1187,16 +1188,25 @@ data/
 Use one ordered migration sequence rather than merging database files:
 
 ```text
-001_initial_schema.sql
+001_authentication.sql
     users, roles, user_roles, permissions, auth_sessions, audit_logs,
     agents, orchestration_jobs, agent_runs, agent_messages
 
-002_multi_agent_orchestration.sql      # current orchestration tables
+002_multi_agent_orchestration.sql      # jobs, runs, messages
 003_agent_principals.sql               # independent Agent identity
 004_agent_policy.sql                   # capabilities and mock resources
 005_agent_credentials.sql              # hashed, revocable Agent credentials
 008_remove_unused_approval_authenticator.sql # remove retired approval tables
+009_waiting_agent_runs.sql             # resumable parent-run state
+010_archived_agents.sql                 # preserve Agent history on archive
+011_data_asset_permissions.sql          # human permissions for protected assets
 ```
+
+The migration runner also recognizes databases created by the earlier policy
+release, including the orchestration branch where policy/credentials were
+recorded as versions `006`/`007` and data assets as `008`. It applies the
+forward-only waiting/archive/data-asset upgrades and records compatibility
+aliases, so existing policy tables and audit history are retained.
 
 If the contributors work on separate initial scripts, combine them manually
 into one migration and run it against a fresh SQLite database before merging.

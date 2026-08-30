@@ -6,6 +6,16 @@ import { createApp } from "./app.js";
 import { AuthStore } from "./auth-store.js";
 import { loadConfig } from "./config.js";
 import type { AgentService } from "./agent-service.js";
+import {
+  OrchestrationDispatcher,
+  type OrchestrationAgentDescriptor,
+  type OrchestrationAgentDirectory,
+} from "./orchestration-dispatcher.js";
+import {
+  InMemoryOrchestrationRepository,
+  RecordingAuthorizer,
+  ScriptedAgentRunner,
+} from "./orchestration-test-doubles.js";
 
 const service = {
   listAgents: () => [],
@@ -117,5 +127,115 @@ describe("HTTP boundary", () => {
     });
     expect(oversized.statusCode).toBe(413);
     await app.close();
+  });
+
+  it("creates, polls, lists, and cancels orchestration jobs through the API", async () => {
+    const repository = new InMemoryOrchestrationRepository();
+    const agent: OrchestrationAgentDescriptor = {
+      id: "11111111-1111-4111-8111-111111111111",
+      agentKey: "alice-frontend",
+      workspacePath: "/workspace/alice",
+      status: "ready",
+    };
+    const directory: OrchestrationAgentDirectory = {
+      getAgentById: (id) => (id === agent.id ? agent : null),
+      getAgentByKey: (key) => (key === agent.agentKey ? agent : null),
+    };
+    const dispatcher = new OrchestrationDispatcher(
+      repository,
+      directory,
+      new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-api",
+      })),
+      new ScriptedAgentRunner([
+        { output: '{"type":"final","content":"API complete"}', threadId: "thread-api", usage: null },
+      ]),
+    );
+    const app = await createApp(loadConfig({ NODE_ENV: "test" }), service, undefined, {
+      repository,
+      dispatcher,
+      agents: directory,
+      authorizer: new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-api",
+      })),
+    });
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/orchestrations",
+      payload: { agentId: agent.id, prompt: "Build it" },
+    });
+    expect(created.statusCode).toBe(202);
+    const createdBody = created.json() as { job: { id: string }; run: { id: string } };
+
+    await expect.poll(() => repository.getJob(createdBody.job.id)?.status).toBe("completed");
+    const state = await app.inject({
+      method: "GET",
+      url: "/api/orchestrations/" + createdBody.job.id,
+    });
+    expect(state.statusCode).toBe(200);
+    expect(state.json()).toMatchObject({ job: { status: "completed" }, runs: [{ id: createdBody.run.id, status: "completed" }] });
+
+    const timeline = await app.inject({
+      method: "GET",
+      url: "/api/orchestrations/" + createdBody.job.id + "/messages",
+    });
+    expect(timeline.statusCode).toBe(200);
+    expect(timeline.json().messages).toHaveLength(2);
+
+    const cancellableRepository = new InMemoryOrchestrationRepository();
+    let releasePending!: (result: { output: string; threadId: string; usage: null }) => void;
+    const cancellableRunner = new ScriptedAgentRunner([
+      () => new Promise((resolve) => {
+        releasePending = resolve;
+      }),
+    ]);
+    const cancellableDispatcher = new OrchestrationDispatcher(
+      cancellableRepository,
+      directory,
+      new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-cancel-api",
+      })),
+      cancellableRunner,
+      { runTimeoutMs: null, jobTimeoutMs: null },
+    );
+    const cancelApp = await createApp(loadConfig({ NODE_ENV: "test" }), service, undefined, {
+      repository: cancellableRepository,
+      dispatcher: cancellableDispatcher,
+      agents: directory,
+      authorizer: new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-cancel-api",
+      })),
+    });
+    const pending = await cancelApp.inject({
+      method: "POST",
+      url: "/api/orchestrations",
+      payload: { agentId: agent.id, prompt: "Cancel it" },
+    });
+    const pendingJobId = (pending.json() as { job: { id: string } }).job.id;
+    await expect.poll(() => cancellableRunner.requests.length).toBe(1);
+    const cancelled = await cancelApp.inject({
+      method: "POST",
+      url: "/api/orchestrations/" + pendingJobId + "/cancel",
+      payload: { reason: "test_cancel" },
+    });
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json()).toMatchObject({ job: { status: "cancelled" } });
+    releasePending({
+      output: '{"type":"final","content":"Cancelled"}',
+      threadId: "cancelled-thread",
+      usage: null,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await app.close();
+    await cancelApp.close();
   });
 });

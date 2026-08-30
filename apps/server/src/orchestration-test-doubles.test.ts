@@ -65,6 +65,13 @@ describe("orchestration test doubles", () => {
     });
 
     expect(child.run.parentRunId).toBe(root.run.id);
+    await repository.startRun({ runId: root.run.id });
+    await expect(repository.waitRun({ runId: root.run.id })).resolves.toMatchObject({
+      status: "waiting",
+    });
+    await expect(repository.resumeRun({ runId: root.run.id })).resolves.toMatchObject({
+      status: "running",
+    });
     expect(repository.listMessages(root.job.id).map((message) => message.sequenceNo)).toEqual([0, 1]);
     await expect(
       repository.createChildRun({

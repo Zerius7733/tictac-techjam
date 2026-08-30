@@ -14,14 +14,15 @@ sqlite3 data/auth.db < db/migrations/003_agent_principals.sql
 sqlite3 data/auth.db < db/migrations/004_agent_policy.sql
 sqlite3 data/auth.db < db/migrations/005_agent_credentials.sql
 sqlite3 data/auth.db < db/migrations/008_remove_unused_approval_authenticator.sql
+sqlite3 data/auth.db < db/migrations/011_data_asset_permissions.sql
 sqlite3 data/auth.db < db/seeds/development_auth.sql
 sqlite3 data/auth.db < db/seeds/development_policy.sql
 ```
 
-The running server applies the same current migrations automatically. Migration
-008 is also applied on startup so an existing `data/auth.db` loses the retired
+The running server applies the same current migrations automatically. Migrations
+006 and 007 are retained for upgrade history; migration 008 removes the retired
 approval and authenticator tables without deleting users, resources, or action
-logs.
+logs. Migration 011 then extends the permission vocabulary with `data_asset`.
 
 The development seed creates:
 
@@ -53,7 +54,7 @@ the Agent credential and the exact active capability.
 ## Combined local database
 
 When the orchestration schema is used in the same SQLite file, apply migrations
-in order and finish with migration 008:
+in order and finish with migration 011:
 
 ```sh
 mkdir -p data
@@ -63,6 +64,9 @@ sqlite3 data/middleware.db < db/migrations/003_agent_principals.sql
 sqlite3 data/middleware.db < db/migrations/004_agent_policy.sql
 sqlite3 data/middleware.db < db/migrations/005_agent_credentials.sql
 sqlite3 data/middleware.db < db/migrations/008_remove_unused_approval_authenticator.sql
+sqlite3 data/middleware.db < db/migrations/009_waiting_agent_runs.sql
+sqlite3 data/middleware.db < db/migrations/010_archived_agents.sql
+sqlite3 data/middleware.db < db/migrations/011_data_asset_permissions.sql
 sqlite3 data/middleware.db < db/seeds/development_auth.sql
 sqlite3 data/middleware.db < db/seeds/development_policy.sql
 ```

@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS agent_action_logs (
     resource_type       TEXT NOT NULL,
     resource_key        TEXT NOT NULL,
     decision             TEXT NOT NULL CHECK (decision IN ('allow', 'deny')),
-    result_code         TEXT NOT NULL,
+    result_code          TEXT NOT NULL,
     metadata_json       TEXT NOT NULL DEFAULT '{}',
     created_at          TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
     FOREIGN KEY (audit_log_id) REFERENCES audit_logs(id) ON DELETE CASCADE,

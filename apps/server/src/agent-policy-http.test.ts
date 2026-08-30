@@ -67,6 +67,28 @@ describe("Agent policy HTTP boundary", () => {
 
     try {
       const sessionToken = login!.sessionToken;
+      const resources = await app.inject({
+        method: "GET",
+        url: "/api/security/mock-resources",
+        headers: { authorization: `Bearer ${sessionToken}` },
+      });
+      expect(resources.statusCode).toBe(200);
+      expect(resources.json().resources).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            resourceType: "data_asset",
+            resourceKey: "order-schema",
+            sensitivity: "shared",
+          }),
+        ]),
+      );
+      expect(resources.json().resources).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ resourceKey: "customer-records" }),
+        ]),
+      );
+      expect(resources.json().resources[0]).not.toHaveProperty("value");
+
       const credentialResponse = await app.inject({
         method: "POST",
         url: `/api/agents/${agent.id}/credentials`,
@@ -79,6 +101,50 @@ describe("Agent policy HTTP boundary", () => {
         token: string;
       };
       expect(credential.token).toMatch(/^agt_/);
+
+      const orderSchemaGrant = await app.inject({
+        method: "POST",
+        url: `/api/agents/${agent.id}/capabilities`,
+        headers: { authorization: `Bearer ${sessionToken}` },
+        payload: {
+          action: "read",
+          resourceType: "data_asset",
+          resourceKey: "order-schema",
+          expiresInSeconds: 3_600,
+        },
+      });
+      expect(orderSchemaGrant.statusCode).toBe(201);
+
+      const orderSchemaRead = await app.inject({
+        method: "POST",
+        url: "/api/agent/tool-calls",
+        headers: { "x-agent-principal-token": credential.token },
+        payload: {
+          action: "read",
+          resourceType: "data_asset",
+          resourceKey: "order-schema",
+        },
+      });
+      expect(orderSchemaRead.statusCode).toBe(200);
+      expect(orderSchemaRead.json()).toMatchObject({
+        status: "allowed",
+        resource: { resourceType: "data_asset", resourceKey: "order-schema" },
+      });
+
+      const customerRecordsRead = await app.inject({
+        method: "POST",
+        url: "/api/agent/tool-calls",
+        headers: { "x-agent-principal-token": credential.token },
+        payload: {
+          action: "read",
+          resourceType: "data_asset",
+          resourceKey: "customer-records",
+        },
+      });
+      expect(customerRecordsRead.statusCode).toBe(403);
+      expect(customerRecordsRead.json()).toMatchObject({
+        reasonCode: "resource_owner_mismatch",
+      });
 
       const beforeGrant = await app.inject({
         method: "POST",

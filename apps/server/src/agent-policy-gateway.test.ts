@@ -97,6 +97,49 @@ describe("AgentPolicyGateway", () => {
     }
   });
 
+  it("supports read-only data assets with human and Agent permissions", async () => {
+    const system = await makePolicySystem();
+
+    const deniedWithoutCapability = system.gateway.execute(system.context, system.agent, {
+      action: "read",
+      resourceType: "data_asset",
+      resourceKey: "order-schema",
+    });
+    expect(deniedWithoutCapability).toMatchObject({
+      allowed: false,
+      reasonCode: "capability_not_granted",
+    });
+
+    system.gateway.grantCapability(system.context, system.agent, {
+      action: "read",
+      resourceType: "data_asset",
+      resourceKey: "order-schema",
+      expiresInSeconds: 3_600,
+    });
+    const allowed = system.gateway.execute(system.context, system.agent, {
+      action: "read",
+      resourceType: "data_asset",
+      resourceKey: "order-schema",
+    });
+    expect(allowed).toMatchObject({
+      status: "allowed",
+      resource: { resourceType: "data_asset", resourceKey: "order-schema" },
+    });
+    if (allowed.status === "allowed") {
+      expect(allowed.resource.value).toContain('"fields"');
+    }
+
+    const protectedCustomerData = system.gateway.execute(system.context, system.agent, {
+      action: "read",
+      resourceType: "data_asset",
+      resourceKey: "customer-records",
+    });
+    expect(protectedCustomerData).toMatchObject({
+      allowed: false,
+      reasonCode: "permission_missing",
+    });
+  });
+
   it("blocks cross-user private resources even when a grant is attempted", async () => {
     const system = await makePolicySystem();
 

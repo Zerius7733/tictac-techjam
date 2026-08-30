@@ -1,5 +1,12 @@
-export type AgentStatus = "ready" | "busy" | "stopped" | "error";
-export type RunStatus = "queued" | "running" | "completed" | "failed" | "cancelled";
+export type AgentStatus = "ready" | "busy" | "stopped" | "error" | "archived";
+/** A run may pause while a delegated child or resource request is resolved. */
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "waiting"
+  | "completed"
+  | "failed"
+  | "cancelled";
 export type MessageRole = "user" | "assistant";
 
 export interface Agent {
@@ -37,6 +44,8 @@ export interface RunUsage {
 export interface AgentRun {
   id: string;
   agentId: string;
+  /** Canonical Codex thread for this run; never inherit another run's thread. */
+  codexThreadId: string | null;
   status: RunStatus;
   prompt: string;
   output: string | null;
@@ -83,6 +92,10 @@ export interface RunnerRequest {
   workspacePath: string;
   prompt: string;
   threadId: string | null;
+  /** Optional orchestration correlation IDs for runtime logs and safeguards. */
+  requestId?: string;
+  jobId?: string;
+  runId?: string;
   humanIdentity?: HumanIdentity;
 }
 

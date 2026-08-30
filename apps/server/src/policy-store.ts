@@ -20,6 +20,10 @@ const defaultSeedPath = path.join(
   repositoryRoot,
   "db/seeds/development_policy.sql",
 );
+const defaultDataAssetMigrationPath = path.join(
+  repositoryRoot,
+  "db/migrations/011_data_asset_permissions.sql",
+);
 
 export type PolicyAction = "read" | "write";
 
@@ -125,6 +129,7 @@ export class PolicyStore {
     private readonly databasePath: string,
     private readonly migrationPath = defaultMigrationPath,
     private readonly seedPath = defaultSeedPath,
+    private readonly dataAssetMigrationPath = defaultDataAssetMigrationPath,
   ) {}
 
   async initialize(seedDevelopment: boolean): Promise<void> {
@@ -132,11 +137,36 @@ export class PolicyStore {
     this.database = new DatabaseSync(this.databasePath);
     this.database.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;");
     this.database.exec(await readFile(this.migrationPath, "utf8"));
+    this.database.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migration_aliases (
+        name       TEXT PRIMARY KEY,
+        applied_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      );
+    `);
     const cleanupApplied = this.database
-      .prepare("SELECT 1 FROM schema_migrations WHERE version = 8")
-      .get();
+      .prepare(
+        `SELECT 1 FROM schema_migrations WHERE name = ?
+         UNION ALL
+         SELECT 1 FROM schema_migration_aliases WHERE name = ?`,
+      )
+      .get("008_remove_unused_approval_authenticator.sql", "008_remove_unused_approval_authenticator.sql");
     if (!cleanupApplied) {
       this.database.exec(await readFile(defaultCleanupMigrationPath, "utf8"));
+      this.database
+        .prepare(
+          `INSERT OR IGNORE INTO schema_migration_aliases (name) VALUES (?)`,
+        )
+        .run("008_remove_unused_approval_authenticator.sql");
+    }
+    const dataAssetApplied = this.database
+      .prepare(
+        `SELECT 1 FROM schema_migrations WHERE name = ?
+         UNION ALL
+         SELECT 1 FROM schema_migration_aliases WHERE name = ?`,
+      )
+      .get("011_data_asset_permissions.sql", "011_data_asset_permissions.sql");
+    if (!dataAssetApplied) {
+      this.database.exec(await readFile(this.dataAssetMigrationPath, "utf8"));
     }
     if (seedDevelopment) {
       this.database.exec(await readFile(this.seedPath, "utf8"));

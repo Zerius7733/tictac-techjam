@@ -8,6 +8,9 @@ import type {
   ChatMode,
   Message,
   MockResource,
+  OrchestrationJob,
+  OrchestrationMessage,
+  OrchestrationRun,
   PolicyAction,
   SystemInfo,
 } from "./types";
@@ -168,6 +171,32 @@ export const api = {
       },
     ),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
+  createOrchestration: (body: { agentId: string; prompt: string }) =>
+    request<{
+      requestId: string;
+      job: OrchestrationJob;
+      run: OrchestrationRun;
+      message: OrchestrationMessage;
+    }>("/api/orchestrations", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  orchestration: (id: string) =>
+    request<{ job: OrchestrationJob; runs: OrchestrationRun[] }>(
+      "/api/orchestrations/" + id,
+    ),
+  orchestrationMessages: (id: string) =>
+    request<{ messages: OrchestrationMessage[] }>(
+      "/api/orchestrations/" + id + "/messages",
+    ),
+  cancelOrchestration: (id: string, reason?: string) =>
+    request<{ job: OrchestrationJob }>(
+      "/api/orchestrations/" + id + "/cancel",
+      {
+        method: "POST",
+        body: JSON.stringify(reason ? { reason } : {}),
+      },
+    ),
   listResources: () =>
     request<{ resources: MockResource[] }>("/api/security/mock-resources"),
   listCapabilities: (id: string) =>

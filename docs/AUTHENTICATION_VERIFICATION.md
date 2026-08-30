@@ -54,6 +54,11 @@ capabilities that are already active.
 
 ## Ownership and isolation checks
 
+If the server is already running, restart it once. Startup applies the
+authentication, direct-capability, orchestration, and `data_asset` migrations
+and seeds the mock resources in development mode. If using Docker, rebuild it
+after pulling the integration branch:
+
 - Sign in as Bob. Bob should not see Alice's Agent in the Agent list.
 - As Alice, try `read Bob's private notes` in Protected data mode. The backend
   should deny it with an ownership mismatch; changing the chat wording must not
@@ -68,7 +73,8 @@ capabilities that are already active.
 Restart the server after pulling this change so it loads the current policy
 behavior. On startup, migration 008 removes the retired approval and
 development-authenticator tables from an existing `data/auth.db` while keeping
-users, resources, capabilities, and action logs.
+users, resources, capabilities, and action logs. Migration 011 adds the
+`data_asset` permission family without removing existing grants.
 
 If the SQLite viewer was already open, close and reopen `data/auth.db` after the
 restart. The current policy tables should include:

@@ -6,6 +6,7 @@ import {
   setAppAuthToken,
   setSessionToken,
 } from "./api";
+import { OrchestrationPanel } from "./OrchestrationPanel";
 import type {
   Agent,
   AgentActionLog,
@@ -136,6 +137,8 @@ function SecurityPanel({
   }, [refresh]);
 
   const selectedResource = resources.find((resource) => resource.resourceKey === resourceKey);
+  const availableActions: PolicyAction[] =
+    selectedResource?.resourceType === "data_asset" ? ["read"] : ["read", "write"];
   const activeCapabilities = capabilities.filter(
     (capability) =>
       !capability.revokedAt && new Date(capability.expiresAt).getTime() > Date.now(),
@@ -309,20 +312,33 @@ function SecurityPanel({
               <span className="security-count">{activeCapabilities.length} active</span>
             </div>
             <p className="security-copy">
-              A capability is exact: one Agent, one resource, and one action. Grant read or write access here, then the backend enforces it for every protected request.
+              A capability is exact: one Agent, one resource, and one action.
+              Data assets are allowlisted and read-only; other demo records can
+              also receive a write capability. The backend enforces the selected
+              capability for every protected request.
             </p>
             <label>
               Protected resource
-              <select value={resourceKey} onChange={(event) => setResourceKey(event.target.value)}>
+              <select
+                value={resourceKey}
+                onChange={(event) => {
+                  const nextKey = event.target.value;
+                  setResourceKey(nextKey);
+                  const nextResource = resources.find(
+                    (resource) => resource.resourceKey === nextKey,
+                  );
+                  if (nextResource?.resourceType === "data_asset") setAction("read");
+                }}
+              >
                 {resources.map((resource) => (
                   <option key={resource.resourceKey} value={resource.resourceKey}>
-                    {resource.resourceKey} · {resource.sensitivity}
+                    {resource.resourceType} · {resource.resourceKey} · {resource.sensitivity}
                   </option>
                 ))}
               </select>
             </label>
             <div className="action-choice" role="group" aria-label="Capability action">
-              {(["read", "write"] as PolicyAction[]).map((option) => (
+              {availableActions.map((option) => (
                 <button
                   type="button"
                   key={option}
@@ -347,7 +363,9 @@ function SecurityPanel({
                 capabilities.map((capability) => (
                   <div className="security-list-row" key={capability.id}>
                     <div>
-                      <strong>{capability.action} · {capability.resourceKey}</strong>
+                      <strong>
+                        {capability.action} · {capability.resourceType} · {capability.resourceKey}
+                      </strong>
                       <span>
                         {capability.revokedAt
                           ? "Revoked"
@@ -419,6 +437,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [showOrchestration, setShowOrchestration] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showSecurity, setShowSecurity] = useState(false);
   const [securitySetup, setSecuritySetup] = useState(false);
@@ -517,7 +536,7 @@ export default function App() {
         if (selectedIdRef.current !== selectedId) return;
         const latest = result.runs[0] ?? null;
         setActiveRun(latest);
-        if (latest && ["queued", "running"].includes(latest.status)) {
+        if (latest && ["queued", "running", "waiting"].includes(latest.status)) {
           void pollRun(latest.id, selectedId).catch((reason) =>
             setError(reason instanceof Error ? reason.message : String(reason)),
           );
@@ -550,6 +569,7 @@ export default function App() {
       const { agent } = await api.createAgent(form);
       await refreshAgents();
       setSelectedId(agent.id);
+      setShowOrchestration(false);
       setShowCreate(false);
       setSecuritySetup(true);
       setShowSecurity(true);
@@ -623,7 +643,7 @@ export default function App() {
         if (!mountedRef.current) return;
         const result = await api.run(runId);
         if (selectedIdRef.current === agentId) setActiveRun(result.run);
-        if (!["queued", "running"].includes(result.run.status)) {
+        if (!["queued", "running", "waiting"].includes(result.run.status)) {
           await Promise.all([refreshMessages(agentId), refreshAgents()]);
           return;
         }
@@ -844,6 +864,14 @@ export default function App() {
           <span>＋</span> Create Agent
         </button>
 
+        <button
+          className="button button-ghost orchestration-nav-button"
+          onClick={() => setShowOrchestration(true)}
+          disabled={busy}
+        >
+          <span>⇄</span> Orchestration
+        </button>
+
         <div className="sidebar-label">
           <span>Your Agents</span>
           <span>{agents.length}</span>
@@ -853,7 +881,10 @@ export default function App() {
             <button
               className={"agent-card " + (agent.id === selectedId ? "selected" : "")}
               key={agent.id}
-              onClick={() => setSelectedId(agent.id)}
+              onClick={() => {
+                setSelectedId(agent.id);
+                setShowOrchestration(false);
+              }}
             >
               <div className="agent-avatar">{agent.name.slice(0, 1).toUpperCase()}</div>
               <div className="agent-card-copy">
@@ -917,7 +948,9 @@ export default function App() {
           </div>
         )}
 
-        {selected ? (
+        {showOrchestration ? (
+          <OrchestrationPanel agents={agents} />
+        ) : selected ? (
           <>
             <header className="agent-header">
               <div>
@@ -1055,7 +1088,7 @@ export default function App() {
                     </article>
                   ))
                 )}
-                {activeRun && ["queued", "running"].includes(activeRun.status) && (
+                {activeRun && ["queued", "running", "waiting"].includes(activeRun.status) && (
                   <article className="message message-assistant thinking">
                     <div className="message-meta">
                       <strong>{selected.name}</strong>
@@ -1122,7 +1155,7 @@ export default function App() {
                   disabled={
                     selected.status === "stopped" ||
                     selected.status === "busy" ||
-                    activeRun != null && ["queued", "running"].includes(activeRun.status)
+                    activeRun != null && ["queued", "running", "waiting"].includes(activeRun.status)
                   }
                   rows={3}
                 />
@@ -1141,7 +1174,7 @@ export default function App() {
                       !prompt.trim() ||
                       selected.status === "stopped" ||
                       selected.status === "busy" ||
-                      (activeRun != null && ["queued", "running"].includes(activeRun.status))
+                      (activeRun != null && ["queued", "running", "waiting"].includes(activeRun.status))
                     }
                     aria-label="Send message"
                   >
