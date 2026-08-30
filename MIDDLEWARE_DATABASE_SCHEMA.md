@@ -221,7 +221,7 @@ Answers: “Can this role perform this action on this resource?”
 | --- | --- | --- | --- |
 | `id` | `TEXT` | Primary key | UUID for the permission |
 | `role_id` | `TEXT` | Not null, foreign key to `roles.id` | Role receiving the rule |
-| `resource_type` | `TEXT` | Not null; `agent`, `run`, `orchestration`, or `system` | Protected resource family |
+| `resource_type` | `TEXT` | Not null; `agent`, `run`, `orchestration`, `system`, or `data_asset` | Protected resource family |
 | `resource_key` | `TEXT` | Not null | Exact key or `*` |
 | `action` | `TEXT` | Not null | For example `invoke`, `view`, `create`, `cancel`, or `*` |
 | `allowed` | `INTEGER` | Not null, default `1`, must be `0` or `1` | Allow or explicit deny |
@@ -525,7 +525,7 @@ CREATE TABLE IF NOT EXISTS permissions (
     id             TEXT PRIMARY KEY,
     role_id        TEXT NOT NULL,
     resource_type  TEXT NOT NULL CHECK (
-        resource_type IN ('agent', 'run', 'orchestration', 'system')
+        resource_type IN ('agent', 'run', 'orchestration', 'system', 'data_asset')
     ),
     resource_key   TEXT NOT NULL,
     action         TEXT NOT NULL,
@@ -948,7 +948,7 @@ The auth module should expose one function with semantics like:
 authorize(
   context: AuthContext,
   action: string,
-  resourceType: 'agent' | 'run' | 'orchestration' | 'system',
+  resourceType: 'agent' | 'run' | 'orchestration' | 'system' | 'data_asset',
   resourceKey: string,
 ): Promise<{
   allowed: boolean;
