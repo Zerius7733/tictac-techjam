@@ -1,6 +1,6 @@
 # Agent Orchestration Middleware Implementation Tracker
 
-Last updated: 2026-08-30
+Last updated: 2026-08-31
 
 This document is the execution checklist for the orchestration contributor. It
 tracks the middleware that turns one authenticated request into an auditable
@@ -58,6 +58,9 @@ session, or permission implementation:
   `order-schema` and `customer-records`.
 - [x] Add protected-data intent parsing and a frontend selector for granting
   and revoking exact Agent/resource capabilities.
+- [x] Make local POC startup idempotently provision the default development
+  resource catalog and collaboration project through an explicit seed flag;
+  keep production seeding disabled unless explicitly enabled.
 
 ## Partner integration queue
 
@@ -534,3 +537,4 @@ These remain mandatory throughout all milestones:
 | 2026-08-30 | 2 / 6 / 7 / 8 (independent slices) | Added idempotent `audit_agent_context` linking, a real SQLite one-active-run race test, an allowlisted sanitized resource provider, `tool_call`/`tool_result` handling, public orchestration routes, polling-safe responses, a reusable waiting-run recovery worker, and a frontend orchestration playground with polling/cancellation. | Focused API/dispatcher/repository/recovery/e2e suite: 26 tests passed; workspace typecheck and root build passed. Real authorization vocabulary/adapter, authenticated recovery context resolution, and production end-to-end seeding remain partner/shared work. |
 | 2026-08-30 | 2 / 6 (complete) | Added migration `011_data_asset_permissions.sql`, seeded the allowlisted `data_asset/order-schema` and private `data_asset/customer-records` resources, added protected intent parsing, enforced read-only data-asset access, and exposed exact resource/action selection in the Security UI. | Focused policy, HTTP, Agent-service, auth-store, and intent suites: 33 tests passed; workspace typecheck passed. The local catalog is sanitized; production provider wiring and dispatcher audit-link integration remain shared/partner work. |
 | 2026-08-30 | Integration branch | Merged `main` and `orchestration` on `orchestration-integration` without changing either source branch. Kept main’s direct capability/revocation policy, merged orchestration’s SQLite runtime, dispatcher, waiting/archive recovery, API/UI, and data-asset flow, and renumbered new forward migrations to 009–011. | Fresh-database and legacy-ledger upgrade smoke tests passed; server tests 80/80, workspace typecheck, and web/server build passed. Remaining shared work is the production authorization/audit-context handoff and the full Alice/Bob seeded demo. |
+| 2026-08-31 | Local POC startup seed (complete) | Added `SEED_DEVELOPMENT_DATA`, wired it through the server composition root, and made `npm run poc` enable it by default while retaining production-style Runtime settings. Existing resources, capabilities, Agents, and project data are preserved by the existing `INSERT OR IGNORE` seeds; production remains opt-out by default. | Server typecheck passed; server suite passed 96/96; config tests cover development, production, explicit POC seeding, and empty-database modes. |

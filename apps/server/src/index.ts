@@ -26,9 +26,9 @@ const collaborativeOutputSchemaPath = await writeCollaborativeOutputSchema(
 );
 
 const authStore = new AuthStore(config.authDatabasePath);
-await authStore.initialize(config.nodeEnv !== "production");
+await authStore.initialize(config.seedDevelopmentData);
 const policyStore = new PolicyStore(config.authDatabasePath);
-await policyStore.initialize(config.nodeEnv !== "production");
+await policyStore.initialize(config.seedDevelopmentData);
 
 const legacyStore = new JsonStore(path.join(config.dataDirectory, "launchpad.json"));
 await legacyStore.initialize();
@@ -47,7 +47,7 @@ await service.initialize();
 const agentDirectory = new AgentStoreDirectory(store);
 const authorizer = new AuthStoreAuthorizer(authStore);
 const projectStore = new ProjectStore(config.authDatabasePath, config.workspaceRoot);
-await projectStore.initialize(config.nodeEnv !== "production");
+await projectStore.initialize(config.seedDevelopmentData);
 const dispatcher = new OrchestrationDispatcher(
   orchestrationRepository,
   agentDirectory,

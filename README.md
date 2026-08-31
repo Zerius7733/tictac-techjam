@@ -226,6 +226,7 @@ cp deploy/volcengine/terraform.tfvars.example \
 | `ARK_BASE_URL` | Beijing v3 endpoint | Ark OpenAI-compatible API URL. |
 | `AUTH_DB_PATH` | `data/auth.db` | Combined SQLite database for users, sessions, permissions, Agents, runs, messages, and audit events. |
 | `APP_AUTH_TOKEN` | Empty on loopback | Shared demo token; use 24+ random characters remotely. |
+| `SEED_DEVELOPMENT_DATA` | `true` in development/local POC, `false` in production | Idempotently seed development users, protected resources, and the Order Dashboard project. Set `false` for an empty local database. |
 | `RUNTIME_PROVIDER` | `local-process` | `container` for disposable local Runtime containers. |
 | `CODEX_SANDBOX_MODE` | `workspace-write` | Codex inner sandbox mode. |
 | `CODEX_TIMEOUT_MS` | `600000` | Maximum duration of one turn. |

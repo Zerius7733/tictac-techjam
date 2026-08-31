@@ -19,6 +19,15 @@ npm run poc
 The local POC reads provider and Runtime settings from `.env`. Explicit shell
 environment variables still take precedence over values in the file.
 
+The POC runs the control plane with production-style Runtime settings while
+setting `SEED_DEVELOPMENT_DATA=true` by default. On a fresh persistent state
+directory this creates the development accounts, the default protected
+resource catalog (including **Frontend design system** and **Backend API
+contract**), and the seeded **Order Dashboard** project. Seeding is
+idempotent: existing Agents, capabilities, resources, and project data are
+preserved. Set `SEED_DEVELOPMENT_DATA=false` before starting when an empty
+database is required.
+
 Open <http://localhost:3000>. Press `Ctrl+C` to stop the server and remove this
 instance's remaining Runtime containers.
 

@@ -55,9 +55,12 @@ capabilities that are already active.
 ## Ownership and isolation checks
 
 If the server is already running, restart it once. Startup applies the
-authentication, direct-capability, orchestration, and `data_asset` migrations
-and seeds the mock resources in development mode. If using Docker, rebuild it
-after pulling the integration branch:
+authentication, direct-capability, orchestration, and `data_asset` migrations.
+`npm run dev` seeds the mock resources by default, and `npm run poc` enables the
+same idempotent development seed catalog through `SEED_DEVELOPMENT_DATA=true`
+while retaining production-style Runtime settings. Production deployments do
+not seed demo data unless that flag is explicitly enabled. If using Docker,
+rebuild it after pulling the integration branch:
 
 - Sign in as Bob. Bob should not see Alice's Agent in the Agent list.
 - As Alice, try `read Bob's private notes` in Protected data mode. The backend

@@ -85,6 +85,13 @@ If `AUTH_DB_PATH` is set in `.env`, use that path instead. Do not run two
 control-plane processes against the same database for this test; separate
 processes can compete for Agent work, recovery, and workspace state.
 
+The local POC sets `SEED_DEVELOPMENT_DATA=true` automatically. On startup it
+creates any missing development accounts, protected resources (including
+**Frontend design system** and **Backend API contract**), and the seeded
+**Order Dashboard** project without replacing existing data. Set
+`SEED_DEVELOPMENT_DATA=false` before starting when an empty database is
+intentional.
+
 ## 3. Create the Agents
 
 ### Option A: UI smoke test (same owner)

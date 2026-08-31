@@ -59,6 +59,23 @@ async function makePolicySystem() {
 }
 
 describe("AgentPolicyGateway", () => {
+  it("seeds the default orchestration data assets", async () => {
+    const system = await makePolicySystem();
+    const resources = system.policyStore
+      .listMockResources(system.context.userId, true)
+      .map((resource) => `${resource.resourceType}:${resource.resourceKey}`);
+
+    expect(resources).toEqual(
+      expect.arrayContaining([
+        "data_asset:order-schema",
+        "data_asset:backend-api-contract",
+        "data_asset:frontend-design-system",
+        "data_asset:shared-project-status",
+        "data_asset:customer-records",
+      ]),
+    );
+  });
+
   it("requires a capability for an Agent resource action", async () => {
     const system = await makePolicySystem();
 
