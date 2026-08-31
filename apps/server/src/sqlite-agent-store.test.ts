@@ -103,9 +103,9 @@ describe("SqliteAgentStore", () => {
       id: agent.id,
       ownerUserId: user!.user.id,
     });
-    expect(store.getAgentByKey(`legacy-${agent.id}`)).toMatchObject({
+    expect(store.getAgentByKey("auth-backed-agent")).toMatchObject({
       id: agent.id,
-      agentKey: `legacy-${agent.id}`,
+      agentKey: "auth-backed-agent",
       status: "ready",
     });
   });
@@ -121,6 +121,7 @@ describe("SqliteAgentStore", () => {
     await legacy.mutate((database) => {
       database.agents.push({
         id: "legacy-agent",
+        agentKey: "legacy-legacy-agent",
         ownerUserId: null,
         principalId: null,
         name: "Imported Agent",

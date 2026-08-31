@@ -309,6 +309,47 @@ button {
   margin-top: 3px;
 }
 
+.agent-key-summary,
+.agent-key-field {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  color: #777870;
+  font-size: 10px;
+}
+
+.agent-key-summary {
+  margin-top: 7px;
+}
+
+.agent-key-summary code,
+.agent-key-field code,
+.orchestration-field-hint code {
+  color: #5543bd;
+  font-size: 10px;
+}
+
+.agent-key-field {
+  flex-wrap: wrap;
+  margin-top: 13px;
+  padding: 10px 12px;
+  border: 1px solid #e5e2da;
+  border-radius: 9px;
+  background: #faf9f5;
+}
+
+.agent-key-field small {
+  flex-basis: 100%;
+  color: #92938b;
+  font-size: 10px;
+}
+
+.form-hint,
+.orchestration-field-hint {
+  color: #85867f;
+  font-size: 10px;
+}
+
 .mini-dot,
 .status-dot {
   border-radius: 999px;
@@ -1103,6 +1144,55 @@ textarea:focus {
   color: #565750;
   font-size: 10px;
   line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.orchestration-output {
+  margin-top: 8px;
+}
+
+.orchestration-output-toggle {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  border: 0;
+  padding: 0;
+  color: #565750;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.orchestration-output-toggle > span {
+  min-width: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.orchestration-output-toggle small {
+  flex: 0 0 auto;
+  color: #6652c9;
+  font-size: 8px;
+  white-space: nowrap;
+}
+
+.orchestration-output-toggle:hover > span {
+  color: #4c3aab;
+}
+
+.orchestration-raw-output {
+  max-height: 360px;
+  overflow: auto;
+  margin: 9px 0 0;
+  border-top: 1px solid #eeece6;
+  padding-top: 9px;
+  color: #5d5d57;
+  font: 9px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

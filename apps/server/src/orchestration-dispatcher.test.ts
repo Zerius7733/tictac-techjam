@@ -21,6 +21,10 @@ class TestAgentDirectory implements OrchestrationAgentDirectory {
   getAgentByKey(agentKey: string): OrchestrationAgentDescriptor | null {
     return this.records.find((agent) => agent.agentKey === agentKey) ?? null;
   }
+
+  listAgents(): OrchestrationAgentDescriptor[] {
+    return this.records;
+  }
 }
 
 class TrackingRepository extends InMemoryOrchestrationRepository {
@@ -40,12 +44,14 @@ class TrackingRepository extends InMemoryOrchestrationRepository {
 const alice: OrchestrationAgentDescriptor = {
   id: "agent-alice",
   agentKey: "alice-frontend",
+  name: "Alice Frontend",
   workspacePath: "/workspace/alice",
   status: "ready",
 };
 const bob: OrchestrationAgentDescriptor = {
   id: "agent-bob",
   agentKey: "bob-order-service",
+  name: "Bob Order Service",
   workspacePath: "/workspace/bob",
   status: "ready",
 };
@@ -62,12 +68,14 @@ describe("OrchestrationDispatcher", () => {
         usage: { inputTokens: 4, outputTokens: 2 },
       },
       {
-        output: '{"type":"final","content":"Order schema: id, total"}',
+        output:
+          '{"type":"final","summary":"Returned the approved order schema.","content":"Order schema: id, total"}',
         threadId: "bob-thread-1",
         usage: { inputTokens: 3, outputTokens: 2 },
       },
       {
-        output: '{"type":"final","content":"Dashboard built against the schema."}',
+        output:
+          '{"type":"final","summary":"Built the dashboard using the approved schema.","content":"Dashboard built against the schema."}',
         threadId: "alice-thread-2",
         usage: { inputTokens: 5, outputTokens: 2 },
       },
@@ -105,11 +113,26 @@ describe("OrchestrationDispatcher", () => {
     expect(repository.getRun(root.run.id)).toMatchObject({
       usage: { inputTokens: 9, outputTokens: 4 },
     });
+    expect(repository.listRuns(root.job.id)[1]?.outputJson).toMatchObject({
+      type: "final",
+      summary: "Returned the approved order schema.",
+    });
+    expect(
+      repository
+        .listMessages(root.job.id)
+        .find((message) => message.messageType === "result")?.payload,
+    ).toMatchObject({ summary: "Returned the approved order schema." });
     expect(runner.requests.map((request) => request.threadId)).toEqual([
       null,
       null,
       "alice-thread-1",
     ]);
+    expect(runner.requests[0]?.prompt).toContain(
+      "Bob Order Service (bob-order-service)",
+    );
+    expect(runner.requests[0]?.prompt).not.toContain(
+      "Alice Frontend (alice-frontend)",
+    );
     expect(runner.requests.map((request) => request.jobId)).toEqual([
       root.job.id,
       root.job.id,

@@ -24,6 +24,49 @@ import {
 
 const now = () => new Date().toISOString();
 
+function assertUniqueAgentName(
+  agents: Agent[],
+  name: string,
+  excludeAgentId?: string,
+): void {
+  const normalizedName = name.toLocaleLowerCase();
+  const duplicate = agents.find(
+    (agent) =>
+      agent.id !== excludeAgentId &&
+      agent.status !== "archived" &&
+      agent.name.trim().toLocaleLowerCase() === normalizedName,
+  );
+  if (duplicate) {
+    throw new HttpError(409, `Agent name "${name}" is already in use`);
+  }
+}
+
+function createAgentKey(name: string, agents: Agent[]): string {
+  const base = slugifyAgentName(name);
+  const usedKeys = new Set(
+    agents.map((agent) => (agent.agentKey || `legacy-${agent.id}`).toLocaleLowerCase()),
+  );
+  let key = base;
+  let suffix = 2;
+  while (usedKeys.has(key.toLocaleLowerCase())) {
+    key = `${base}-${suffix}`;
+    suffix += 1;
+  }
+  return key;
+}
+
+function slugifyAgentName(name: string): string {
+  const slug = name
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLocaleLowerCase()
+    .slice(0, 72)
+    .replace(/-+$/g, "");
+  return slug || "agent";
+}
+
 type ProtectedChatOperation =
   | { kind: "resource"; intent: ProtectedResourceIntent };
 
@@ -87,11 +130,13 @@ export class AgentService {
   async createAgent(input: CreateAgentInput, ownerUserId?: string): Promise<Agent> {
     const timestamp = now();
     const id = randomUUID();
+    const name = input.name.trim();
     const agent: Agent = {
       id,
+      agentKey: "",
       ownerUserId: ownerUserId ?? null,
       principalId: null,
-      name: input.name.trim(),
+      name,
       description: input.description?.trim() ?? "",
       instructions: input.instructions?.trim() ?? "",
       status: "ready",
@@ -107,8 +152,12 @@ export class AgentService {
         : null;
     agent.principalId = principal?.id ?? null;
     try {
-      await this.workspaces.create(agent);
-      await this.store.mutate((database) => database.agents.push(agent));
+      await this.store.mutate(async (database) => {
+        assertUniqueAgentName(database.agents, name);
+        agent.agentKey = createAgentKey(name, database.agents);
+        await this.workspaces.create(agent);
+        database.agents.push(agent);
+      });
     } catch (error) {
       if (principal) this.authStore?.revokeAgentPrincipal(id);
       throw error;
@@ -140,7 +189,13 @@ export class AgentService {
       if (agent.status === "busy") {
         throw new HttpError(409, "Stop the active run before editing this Agent");
       }
-      if (input.name !== undefined) agent.name = input.name.trim();
+      if (input.name !== undefined) {
+        const name = input.name.trim();
+        if (name.toLocaleLowerCase() !== agent.name.toLocaleLowerCase()) {
+          assertUniqueAgentName(database.agents, name, id);
+        }
+        agent.name = name;
+      }
       if (input.description !== undefined) agent.description = input.description.trim();
       if (input.instructions !== undefined) agent.instructions = input.instructions.trim();
       agent.lastError = null;

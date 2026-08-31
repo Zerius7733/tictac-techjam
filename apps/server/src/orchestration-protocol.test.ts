@@ -7,8 +7,13 @@ import {
 
 describe("structured Agent orchestration protocol", () => {
   it("parses a final response", () => {
-    expect(parseAgentCommand('{"type":"final","content":"Done."}')).toEqual({
+    expect(
+      parseAgentCommand(
+        '{"type":"final","summary":"Completed the requested task.","content":"Done."}',
+      ),
+    ).toEqual({
       type: "final",
+      summary: "Completed the requested task.",
       content: "Done.",
     });
   });

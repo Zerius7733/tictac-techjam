@@ -10,6 +10,7 @@ const agentKey = boundedText(80).regex(
 export const finalAgentCommandSchema = z
   .object({
     type: z.literal("final"),
+    summary: boundedText(280).optional(),
     content: boundedText(50_000),
   })
   .strict();

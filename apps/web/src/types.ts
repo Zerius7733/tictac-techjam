@@ -11,6 +11,8 @@ export type ChatMode = "agent" | "protected-data";
 
 export interface Agent {
   id: string;
+  /** Stable human-readable key used when one Agent delegates to another. */
+  agentKey: string;
   ownerUserId: string | null;
   principalId: string | null;
   name: string;
@@ -93,6 +95,7 @@ export interface OrchestrationRun {
   status: OrchestrationRunStatus;
   prompt: string;
   outputText: string | null;
+  outputJson: Record<string, unknown> | null;
   errorText: string | null;
   codexThreadId: string | null;
   createdAt: string;

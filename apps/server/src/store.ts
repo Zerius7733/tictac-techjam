@@ -30,6 +30,7 @@ export class JsonStore implements AgentStore {
         ...parsed,
         agents: parsed.agents.map((agent) => ({
           ...agent,
+          agentKey: agent.agentKey ?? `legacy-${agent.id}`,
           ownerUserId: agent.ownerUserId ?? null,
           principalId: agent.principalId ?? null,
         })),

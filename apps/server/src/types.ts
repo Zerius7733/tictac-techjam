@@ -11,6 +11,8 @@ export type MessageRole = "user" | "assistant";
 
 export interface Agent {
   id: string;
+  /** Stable human-readable key used when one Agent delegates to another. */
+  agentKey: string;
   /** The authenticated user who created this Agent; null for legacy/system Agents. */
   ownerUserId: string | null;
   /** Independent Agent identity; null for legacy/system Agents. */

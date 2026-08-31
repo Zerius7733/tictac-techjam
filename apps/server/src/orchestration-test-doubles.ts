@@ -286,6 +286,7 @@ export class InMemoryOrchestrationRepository implements OrchestrationRepository 
       senderKey: run.agentId,
       messageType: "result",
       content: input.outputText,
+      payload: input.outputJson ?? {},
       createdAt: run.completedAt,
     });
     return structuredClone(run);

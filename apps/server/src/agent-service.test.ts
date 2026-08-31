@@ -134,6 +134,23 @@ describe("Agent lifecycle", () => {
     expect(service.listAgents()).toHaveLength(0);
   });
 
+  it("generates readable unique delegation keys and keeps them stable across renames", async () => {
+    const service = await makeService();
+    const agent = await service.createAgent({ name: "Frontend Builder" });
+    expect(agent.agentKey).toBe("frontend-builder");
+
+    await expect(service.createAgent({ name: "frontend builder" })).rejects.toMatchObject({
+      statusCode: 409,
+    });
+
+    const slugCollision = await service.createAgent({ name: "Frontend Builder!" });
+    expect(slugCollision.agentKey).toBe("frontend-builder-2");
+
+    const renamed = await service.updateAgent(agent.id, { name: "UI Builder" });
+    expect(renamed.name).toBe("UI Builder");
+    expect(renamed.agentKey).toBe("frontend-builder");
+  });
+
   it("archives an Agent without deleting its conversation history", async () => {
     const service = await makeService();
     const agent = await service.createAgent({ name: "Historical" });

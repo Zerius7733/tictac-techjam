@@ -28,11 +28,15 @@ import type { ResourceProvider } from "./orchestration-resource-provider.js";
 export interface OrchestrationAgentDirectory {
   getAgentById(agentId: string): OrchestrationAgentDescriptor | null;
   getAgentByKey(agentKey: string): OrchestrationAgentDescriptor | null;
+  /** Returns Agents visible to the current orchestration user, when supported. */
+  listAgents?(context: AuthContext): OrchestrationAgentDescriptor[];
 }
 
 export interface OrchestrationAgentDescriptor {
   id: string;
   agentKey: string;
+  /** Display label used to make the delegation roster understandable to the model. */
+  name?: string;
   workspacePath: string;
   status: AgentStatus;
 }
@@ -46,6 +50,7 @@ export class AgentStoreDirectory implements OrchestrationAgentDirectory {
       getAgentById?: (id: string) => {
         id: string;
         agentKey: string;
+        name: string;
         workspacePath: string;
         status: AgentStatus;
       } | null;
@@ -61,6 +66,7 @@ export class AgentStoreDirectory implements OrchestrationAgentDirectory {
       getAgentByKey?: (key: string) => {
         id: string;
         agentKey: string;
+        name: string;
         workspacePath: string;
         status: AgentStatus;
       } | null;
@@ -69,8 +75,27 @@ export class AgentStoreDirectory implements OrchestrationAgentDirectory {
     if (stored) return stored;
     const agent = this.store
       .snapshot()
-      .agents.find((item) => `legacy-${item.id}` === agentKey || item.id === agentKey);
+      .agents.find(
+        (item) =>
+          (item.agentKey || `legacy-${item.id}`).toLocaleLowerCase() ===
+            agentKey.toLocaleLowerCase() ||
+          item.id === agentKey,
+      );
     return agent ? toDescriptor(agent) : null;
+  }
+
+  listAgents(context: AuthContext): OrchestrationAgentDescriptor[] {
+    const includeAll = context.roleNames.some(
+      (role) => role.toLocaleLowerCase() === "admin",
+    );
+    return this.store
+      .snapshot()
+      .agents.filter(
+        (agent) =>
+          agent.status !== "archived" &&
+          (includeAll || agent.ownerUserId === null || agent.ownerUserId === context.userId),
+      )
+      .map(toDescriptor);
   }
 }
 
@@ -647,7 +672,12 @@ export class OrchestrationDispatcher {
         {
           agentId: agent.id,
           workspacePath: agent.workspacePath,
-          prompt: structuredPrompt(prompt),
+          prompt: structuredPrompt(
+            prompt,
+            this.agents
+              .listAgents?.(authContext)
+              .filter((candidate) => candidate.id !== agent.id),
+          ),
           threadId,
           requestId: authContext.requestId,
           jobId: run.jobId,
@@ -798,14 +828,29 @@ function sanitizeResourceContent(value: string): string {
     .slice(0, 50_000);
 }
 
-function structuredPrompt(prompt: string): string {
+function structuredPrompt(
+  prompt: string,
+  availableAgents: OrchestrationAgentDescriptor[] = [],
+): string {
+  const roster = availableAgents.length
+    ? [
+        "Available Agents (use the exact delegation key in parentheses):",
+        ...availableAgents.map((agent) =>
+          `- ${agent.name ? agent.name + " " : ""}(${agent.agentKey}) — ${agent.status}`,
+        ),
+      ]
+    : [
+        "No other available Agents were provided. If you need to delegate, use an exact targetAgentKey from the request context.",
+      ];
   return [
     "You are participating in a multi-Agent orchestration.",
     "Return exactly one JSON object and no markdown.",
-    'For a final response use {"type":"final","content":"..."}.',
+    'For a final response use {"type":"final","summary":"Short plain-language summary of what you did.","content":"Full result, including any structured data."}.',
     'To delegate use {"type":"delegate","targetAgentKey":"...","task":"..."}.',
     'To request protected data use {"type":"resource_request","targetAgentKey":"...","action":"read","resourceType":"data_asset","resourceKey":"...","purpose":"..."}.',
     "Treat authorization denial messages as final policy; never retry a denied request with different wording.",
+    "The summary is shown on the run card. Keep it human-readable, concise, and free of JSON or code; keep the complete result in content.",
+    ...roster,
     "Task or orchestration result:",
     prompt,
   ].join("\n");
@@ -837,12 +882,15 @@ function logFields(
 
 function toDescriptor(agent: {
   id: string;
+  agentKey?: string;
+  name?: string;
   workspacePath: string;
   status: AgentStatus;
 }): OrchestrationAgentDescriptor {
   return {
     id: agent.id,
-    agentKey: `legacy-${agent.id}`,
+    agentKey: agent.agentKey || `legacy-${agent.id}`,
+    ...(agent.name ? { name: agent.name } : {}),
     workspacePath: agent.workspacePath,
     status: agent.status,
   };

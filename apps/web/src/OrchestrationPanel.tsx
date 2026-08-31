@@ -12,6 +12,7 @@ interface OrchestrationPanelProps {
 }
 
 const activeStatuses = new Set(["queued", "running", "waiting"]);
+const expandableMessageTypes = new Set(["result", "tool_call", "tool_result"]);
 
 function formatTime(value: string): string {
   return new Intl.DateTimeFormat(undefined, {
@@ -34,6 +35,81 @@ function messageTitle(message: OrchestrationMessage, names: Map<string, string>)
   return "You";
 }
 
+function payloadString(payload: Record<string, unknown>, key: string): string | null {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function fallbackSummary(content: string, fallback: string): string {
+  const value = content.trim();
+  if (!value || value.startsWith("{") || value.startsWith("[")) return fallback;
+  const firstLine = value.split(/\r?\n/, 1)[0]?.replace(/[`*_#]/g, "").trim() ?? "";
+  if (!firstLine || firstLine.startsWith("{") || firstLine.startsWith("[")) {
+    return fallback;
+  }
+  return firstLine.length > 180 ? firstLine.slice(0, 177) + "…" : firstLine;
+}
+
+function runSummary(run: OrchestrationRun): string {
+  const summary = run.outputJson ? payloadString(run.outputJson, "summary") : null;
+  return summary ?? fallbackSummary(run.outputText ?? "", "Agent completed the run.");
+}
+
+function messageSummary(message: OrchestrationMessage): string {
+  const summary = payloadString(message.payload, "summary");
+  if (summary) return summary;
+
+  if (message.messageType === "tool_result") {
+    const type = payloadString(message.payload, "type");
+    if (type === "authorization_denied") {
+      const reason = payloadString(message.payload, "reasonCode") ?? "policy denied";
+      const resource = payloadString(message.payload, "resourceKey");
+      return `Authorization denied: ${resource ? resource + " · " : ""}${reason}.`;
+    }
+    if (type === "child_result") return "Received a result from the delegated Agent.";
+    return "The orchestration gateway returned a tool result.";
+  }
+
+  if (message.messageType === "tool_call") return "The orchestration gateway requested an authorized action.";
+  return fallbackSummary(message.content, "Agent returned a completed result.");
+}
+
+function rawRunOutput(run: OrchestrationRun): string {
+  return run.outputJson
+    ? JSON.stringify(run.outputJson, null, 2)
+    : run.outputText ?? "";
+}
+
+function rawMessageOutput(message: OrchestrationMessage): string {
+  return Object.keys(message.payload).length > 0
+    ? JSON.stringify(message.payload, null, 2)
+    : message.content;
+}
+
+interface ExpandableOutputProps {
+  summary: string;
+  raw: string;
+  expanded: boolean;
+  onToggle: () => void;
+}
+
+function ExpandableOutput({ summary, raw, expanded, onToggle }: ExpandableOutputProps) {
+  return (
+    <div className="orchestration-output">
+      <button
+        type="button"
+        className="orchestration-output-toggle"
+        onClick={onToggle}
+        aria-expanded={expanded}
+      >
+        <span>{summary}</span>
+        <small>{expanded ? "Hide raw JSON" : "View raw JSON"}</small>
+      </button>
+      {expanded && <pre className="orchestration-raw-output">{raw}</pre>}
+    </div>
+  );
+}
+
 export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
   const availableAgents = useMemo(
     () => agents.filter((agent) => agent.status !== "archived"),
@@ -46,6 +122,7 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
   const [job, setJob] = useState<OrchestrationJob | null>(null);
   const [runs, setRuns] = useState<OrchestrationRun[]>([]);
   const [messages, setMessages] = useState<OrchestrationMessage[]>([]);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -97,6 +174,7 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
       setJob(created.job);
       setRuns([created.run]);
       setMessages([created.message]);
+      setExpandedIds(new Set());
     } catch (reason) {
       setError(
         reason instanceof ApiError
@@ -131,9 +209,24 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
   };
 
   const names = useMemo(
-    () => new Map(agents.map((agent) => [agent.id, agent.name])),
+    () =>
+      new Map(
+        agents.flatMap((agent) => [
+          [agent.id, agent.name],
+          [agent.agentKey, agent.name],
+        ]),
+      ),
     [agents],
   );
+  const selectedAgent = availableAgents.find((agent) => agent.id === agentId);
+  const toggleExpanded = (id: string) => {
+    setExpandedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   return (
     <section className="orchestration-panel">
@@ -153,9 +246,14 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
           Root Agent
           <select value={agentId} onChange={(event) => setAgentId(event.target.value)} disabled={busy || availableAgents.length === 0}>
             {availableAgents.map((agent) => (
-              <option key={agent.id} value={agent.id}>{agent.name}</option>
+              <option key={agent.id} value={agent.id}>{agent.name} · {agent.agentKey}</option>
             ))}
           </select>
+          {selectedAgent && (
+            <small className="orchestration-field-hint">
+              Delegation key: <code>{selectedAgent.agentKey}</code>
+            </small>
+          )}
         </label>
         <label>
           Request
@@ -190,7 +288,14 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
                     <div><strong>{names.get(run.agentId) ?? run.agentId}</strong><span className={"run-state state-" + run.status}>{statusLabel(run.status)}</span></div>
                     <small>{run.parentRunId ? "Delegated child" : "Root run"} · {run.id.slice(0, 8)}</small>
                     {run.errorText && <p className="orchestration-error">{run.errorText}</p>}
-                    {run.outputText && <p>{run.outputText}</p>}
+                    {run.outputText && (
+                      <ExpandableOutput
+                        summary={runSummary(run)}
+                        raw={rawRunOutput(run)}
+                        expanded={expandedIds.has("run:" + run.id)}
+                        onToggle={() => toggleExpanded("run:" + run.id)}
+                      />
+                    )}
                   </article>
                 ))}
               </div>
@@ -201,7 +306,16 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
                 {messages.map((message) => (
                   <article className={"orchestration-event event-" + message.messageType} key={message.id}>
                     <div><strong>{messageTitle(message, names)}</strong><span>{message.messageType.replaceAll("_", " ")} · {formatTime(message.createdAt)}</span></div>
-                    <p>{message.content}</p>
+                    {expandableMessageTypes.has(message.messageType) ? (
+                      <ExpandableOutput
+                        summary={messageSummary(message)}
+                        raw={rawMessageOutput(message)}
+                        expanded={expandedIds.has("message:" + message.id)}
+                        onToggle={() => toggleExpanded("message:" + message.id)}
+                      />
+                    ) : (
+                      <p>{message.content}</p>
+                    )}
                   </article>
                 ))}
               </div>

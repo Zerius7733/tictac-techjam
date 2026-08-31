@@ -34,6 +34,7 @@ describe("Agent policy HTTP boundary", () => {
     const principal = authStore.createAgentPrincipal(randomUUID(), login!.user.id);
     const agent: Agent = {
       id: principal.agentId,
+      agentKey: "alice-http-policy-agent",
       ownerUserId: login!.user.id,
       principalId: principal.id,
       name: "Alice HTTP Policy Agent",

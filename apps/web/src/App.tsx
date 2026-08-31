@@ -959,6 +959,10 @@ export default function App() {
                   <StatusPill status={selected.status} />
                 </div>
                 <p>{selected.description || "A Codex coding Agent in an isolated workspace."}</p>
+                <div className="agent-key-summary">
+                  <span>Delegation key</span>
+                  <code>{selected.agentKey}</code>
+                </div>
               </div>
               <div className="header-actions">
                 <button
@@ -1024,6 +1028,11 @@ export default function App() {
                       maxLength={500}
                     />
                   </label>
+                </div>
+                <div className="agent-key-field">
+                  <span>Delegation key</span>
+                  <code>{selected.agentKey}</code>
+                  <small>This stable key is what another Agent uses to delegate work to this Agent.</small>
                 </div>
                 <label>
                   System instructions
@@ -1215,6 +1224,7 @@ export default function App() {
                 <span className="eyebrow">New workspace</span>
                 <h2>Create an Agent</h2>
                 <p>Each Agent gets a persistent folder and a resumable Codex session.</p>
+                <p className="form-hint">Use a unique name. A short delegation key will be generated automatically.</p>
               </div>
               <button type="button" onClick={() => setShowCreate(false)}>×</button>
             </div>

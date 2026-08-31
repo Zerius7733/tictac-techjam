@@ -290,6 +290,7 @@ export class SqliteOrchestrationRepository implements OrchestrationRepository {
         senderKey: run.agentId,
         messageType: "result",
         content: input.outputText,
+        payload: input.outputJson ?? {},
         createdAt: completedAt,
       });
       this.db()

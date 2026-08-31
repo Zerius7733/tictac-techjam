@@ -20,6 +20,7 @@ type SqlRow = Record<string, unknown>;
 export interface SqliteAgentDirectoryRecord {
   id: string;
   agentKey: string;
+  name: string;
   workspacePath: string;
   status: AgentStatus;
 }
@@ -60,7 +61,7 @@ export class SqliteAgentStore implements AgentStore {
   getAgentById(agentId: string): SqliteAgentDirectoryRecord | null {
     const row = this.db()
       .prepare(
-        "SELECT id, agent_key, workspace_path, status FROM agents WHERE id = ?",
+        "SELECT id, agent_key, name, workspace_path, status FROM agents WHERE id = ?",
       )
       .get(agentId) as SqlRow | undefined;
     return row ? toDirectoryRecord(row) : null;
@@ -69,7 +70,7 @@ export class SqliteAgentStore implements AgentStore {
   getAgentByKey(agentKey: string): SqliteAgentDirectoryRecord | null {
     const row = this.db()
       .prepare(
-        "SELECT id, agent_key, workspace_path, status FROM agents WHERE agent_key = ? COLLATE NOCASE",
+        "SELECT id, agent_key, name, workspace_path, status FROM agents WHERE agent_key = ? COLLATE NOCASE",
       )
       .get(agentKey) as SqlRow | undefined;
     return row ? toDirectoryRecord(row) : null;
@@ -172,7 +173,7 @@ function writeSnapshot(database: DatabaseSync, next: Database): void {
       const existing = database
         .prepare("SELECT agent_key FROM agents WHERE id = ?")
         .get(agent.id) as { agent_key?: string } | undefined;
-      const agentKey = existing?.agent_key ?? `legacy-${agent.id}`;
+      const agentKey = existing?.agent_key ?? agent.agentKey ?? `legacy-${agent.id}`;
       database
         .prepare(
           `INSERT INTO agents
@@ -344,6 +345,7 @@ function isLegacyJob(database: DatabaseSync, jobId: string): boolean {
 function toAgent(row: SqlRow, principalId: string | null): Agent {
   return {
     id: String(row.id),
+    agentKey: String(row.agent_key),
     ownerUserId: row.owner_user_id === null ? null : String(row.owner_user_id),
     principalId,
     name: String(row.name),
@@ -363,6 +365,7 @@ function toDirectoryRecord(row: SqlRow): SqliteAgentDirectoryRecord {
   return {
     id: String(row.id),
     agentKey: String(row.agent_key),
+    name: String(row.name),
     workspacePath: String(row.workspace_path),
     status: row.status as AgentStatus,
   };

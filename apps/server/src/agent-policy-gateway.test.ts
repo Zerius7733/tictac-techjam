@@ -35,6 +35,7 @@ async function makePolicySystem() {
   const principal = authStore.createAgentPrincipal(agentId, login!.user.id);
   const agent: Agent = {
     id: agentId,
+    agentKey: "alice-policy-agent",
     ownerUserId: login!.user.id,
     principalId: principal.id,
     name: "Alice Policy Agent",
