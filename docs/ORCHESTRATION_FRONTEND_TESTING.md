@@ -107,7 +107,215 @@ Agent ownership is enforced. The orchestration authorization contributor must
 provide the cross-Agent invocation/delegation rule before this becomes a
 complete Alice/Bob frontend demo.
 
-## 3.1 Two-user frontend flow: Alice talks to Bob
+## 3.1 Recommended first test: one user, two Agents
+
+Use this flow before attempting the separate Alice/Bob browser flow. It keeps
+one human session and one owner, so you can validate the orchestration UI,
+delegation, run waiting/resume, and the shared database without cross-owner
+authorization setup.
+
+### Step 1: start the app
+
+Start only one local server:
+
+```bash
+npm run poc
+```
+
+Open <http://localhost:3000>. For host development, use `npm run dev` and open
+<http://localhost:5173> instead.
+
+### Step 2: sign in as Alice
+
+Use the development account:
+
+```text
+Username: alice
+Password: alice-demo-2026
+```
+
+Stay signed in as Alice for the entire test. Do not open a second account yet.
+
+### Step 3: create Alice's root Agent
+
+1. Click **Create Agent**.
+2. Set the name to `Alice Frontend`.
+3. Set the instructions to:
+
+   ```text
+   You are Alice's frontend integration Agent.
+
+   For every orchestration turn, return exactly one JSON object and no
+   markdown. A final response must use:
+   {"type":"final","content":"..."}
+
+   When instructed to delegate, use the exact server-owned targetAgentKey
+   provided in the request. Never invent a key. Never request customer-records
+   and never expose secrets or credentials.
+   ```
+
+4. Click **Create Agent**.
+5. Confirm `Alice Frontend` appears in the sidebar with status **ready**.
+
+### Step 4: create Bob's worker Agent under the same Alice account
+
+This is only a local smoke-test shortcut. It is not the separate-owner
+Alice/Bob identity test.
+
+1. Click **Create Agent** again.
+2. Set the name to `Bob Order Service`.
+3. Set the instructions to:
+
+   ```text
+   You are the order-service worker Agent.
+
+   Return only a sanitized order API schema when asked. Never return customer
+   records, private data, credentials, tokens, or secrets.
+
+   For every orchestration turn, return exactly one JSON object and no
+   markdown. Use:
+   {"type":"final","content":"<sanitized order schema>"}
+   ```
+
+4. Click **Create Agent**.
+5. Confirm `Bob Order Service` also shows status **ready**.
+
+Newly created Agents are normally ready immediately. If an Agent shows
+**stopped**, select it and click **Start** before continuing.
+
+### Step 5: retrieve Bob's key
+
+The UI currently does not show the server-owned key in the Agent card. From a
+terminal in the repository root, run:
+
+```bash
+sqlite3 data/auth.db \
+  "SELECT name, agent_key, status
+   FROM agents
+   WHERE name IN ('Alice Frontend', 'Bob Order Service');"
+```
+
+Copy the `agent_key` for `Bob Order Service`. It will usually look like
+`legacy-<uuid>`, but always use the value returned by SQLite.
+
+### Step 6: put Bob's real key in Alice's instructions
+
+1. Select `Alice Frontend` in the sidebar.
+2. Click **Settings**.
+3. Replace the phrase `provided in the request` with the actual Bob key, for
+   example:
+
+   ```text
+   When you need the order schema, delegate only to this targetAgentKey:
+   legacy-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+   ```
+
+4. Keep the exact-JSON requirement in the instructions.
+5. Click **Save changes**.
+
+This removes the most common `agent_not_found` failure caused by a guessed
+target key.
+
+### Step 7: run a final-response smoke test first
+
+Click **Orchestration** in the sidebar. Select `Alice Frontend` as the Root
+Agent and submit:
+
+```text
+Return exactly {"type":"final","content":"single-user orchestration works"} and no markdown.
+```
+
+Click **Start orchestration**. You should see:
+
+```text
+Job:      queued -> running -> completed
+Root run: queued -> running -> completed
+```
+
+Do not continue to delegation until this basic test completes successfully.
+
+### Step 8: run the single-user delegation test
+
+Submit this request, replacing `<BOB_AGENT_KEY>` with the value from Step 5:
+
+```text
+Delegate to the order-service Agent using targetAgentKey <BOB_AGENT_KEY>.
+Ask it to provide a sanitized order schema only. Do not request
+customer-records. After receiving the result, return a final recommendation
+for an order dashboard.
+```
+
+The expected protocol command from Alice is:
+
+```json
+{
+  "type": "delegate",
+  "targetAgentKey": "<BOB_AGENT_KEY>",
+  "task": "Provide a sanitized order schema only."
+}
+```
+
+The expected run tree is:
+
+```text
+Alice Frontend: running -> waiting -> running -> completed
+Bob Order Service: queued -> running -> completed
+```
+
+The timeline should show a delegation event, Bob's child result, and Alice's
+final result. Bob's child run uses Bob's workspace; Alice resumes her own
+run-level conversation thread.
+
+### Step 9: test the safe denial
+
+Submit:
+
+```text
+Delegate to the order-service Agent using targetAgentKey <BOB_AGENT_KEY> and
+ask for customer-records. If access is denied, do not retry and explain why.
+```
+
+Expected behavior:
+
+- A denial/tool-result event appears in the timeline.
+- No customer data is displayed.
+- No unauthorized provider lookup occurs.
+- Alice resumes and returns a safe explanation.
+
+For this first denial test, do not grant `customer-records` to any Agent.
+
+### Step 10: verify the generated workspace
+
+This orchestration test does not require the Agents to create application
+files. If you also want Alice to build the dashboard, add this to the request:
+
+```text
+After receiving the approved schema, build the order dashboard in the Alice
+Frontend workspace. Run the available build and tests, but do not start a
+long-running development server.
+```
+
+Open **Settings** for `Alice Frontend` and copy the workspace path shown at the
+bottom. Any dashboard files created by Alice will be in that directory.
+
+### Single-user pass criteria
+
+```text
+[ ] Alice can sign in and see both Agents.
+[ ] Both Agents are ready.
+[ ] Bob's real agent_key is read from SQLite.
+[ ] A final-response orchestration completes.
+[ ] Delegation creates a Bob child run.
+[ ] Alice enters waiting and then resumes.
+[ ] A customer-records request is denied safely.
+[ ] Job IDs, run IDs, and timeline events appear in the UI.
+```
+
+If Step 7 passes but Step 8 fails, the Runtime is working and the problem is
+usually the target key, Agent instructions, or authorization. If Step 7 fails,
+fix Runtime configuration or the JSON protocol before testing delegation.
+
+## 3.2 Two-user frontend flow: Alice talks to Bob
 
 This is the complete browser flow when Alice and Bob are separate human
 accounts. Use two Chrome profiles (or one normal window and one incognito
