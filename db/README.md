@@ -27,8 +27,11 @@ logs. Migration 011 then extends the permission vocabulary with `data_asset`.
 The development seed creates:
 
 - `alice` with the `developer` role;
-- `bob` with the `viewer` role; and
-- Alice's and Bob's private mock notes plus the shared status record.
+- `bob` with the `developer` role; and
+- Alice's and Bob's private mock notes, shared project resources, and the
+  seeded **Order Dashboard** project owned by Alice. Bob must accept Alice's
+  invitation before he becomes a project collaborator or exposes his Agent to
+  that project.
 
 The demo login credentials are:
 
@@ -54,7 +57,7 @@ the Agent credential and the exact active capability.
 ## Combined local database
 
 When the orchestration schema is used in the same SQLite file, apply migrations
-in order and finish with migration 011:
+in order through migration 014:
 
 ```sh
 mkdir -p data
@@ -67,12 +70,22 @@ sqlite3 data/middleware.db < db/migrations/008_remove_unused_approval_authentica
 sqlite3 data/middleware.db < db/migrations/009_waiting_agent_runs.sql
 sqlite3 data/middleware.db < db/migrations/010_archived_agents.sql
 sqlite3 data/middleware.db < db/migrations/011_data_asset_permissions.sql
+sqlite3 data/middleware.db < db/migrations/012_project_collaboration.sql
+sqlite3 data/middleware.db < db/migrations/013_project_invitations.sql
+sqlite3 data/middleware.db < db/migrations/014_reconcile_seeded_project_invitation.sql
 sqlite3 data/middleware.db < db/seeds/development_auth.sql
 sqlite3 data/middleware.db < db/seeds/development_policy.sql
+sqlite3 data/middleware.db < db/seeds/development_projects.sql
 ```
 
 The orchestration migration references the auth-owned `users` and `audit_logs`
-tables. It must not create another identity table.
+tables. It must not create another identity table. Migration 012 adds the
+project, membership, selected-Agent, and project-job tables. Migration 013 adds
+pending project invitations, and migration 014 repairs an older local demo
+state where the seeded invitation had already been accepted. The running
+server applies them automatically;
+manual setups should apply them after migration 011 and then run
+`db/seeds/development_projects.sql`.
 
 ## Ownership boundary
 

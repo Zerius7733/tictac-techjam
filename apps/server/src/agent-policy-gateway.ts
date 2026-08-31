@@ -158,6 +158,69 @@ export class AgentPolicyGateway {
     );
   }
 
+  /**
+   * Apply the human/resource intersection for a project orchestration request.
+   * Project membership decides whether the caller may use a foreign Agent;
+   * this method then requires that Agent's own principal capability as well.
+   */
+  executeForOrchestration(
+    context: Pick<AuthContext, "requestId" | "userId" | "roleNames">,
+    agent: OrchestrationAgentLike,
+    input: ToolCallRequest,
+  ): AgentPolicyDecision {
+    const humanDecision = this.authStore.authorize(
+      context as AuthContext,
+      "invoke",
+      "agent",
+      agent.agentKey,
+    );
+    const resourceDecision =
+      input.resourceType === "data_asset"
+        ? this.authStore.authorize(
+            context as AuthContext,
+            input.action,
+            "data_asset",
+            input.resourceKey,
+          )
+        : null;
+    const principal = agent.principalId
+      ? this.authStore.getAgentPrincipal(agent.id)
+      : null;
+
+    if (!humanDecision.allowed) {
+      return this.denied(principal, input, humanDecision.auditLogId, "human_permission_denied");
+    }
+    if (resourceDecision && !resourceDecision.allowed) {
+      return this.denied(
+        principal,
+        input,
+        resourceDecision.auditLogId,
+        resourceDecision.reasonCode,
+      );
+    }
+    if (
+      !principal ||
+      principal.id !== agent.principalId ||
+      principal.ownerUserId !== agent.ownerUserId ||
+      principal.status !== "active"
+    ) {
+      return this.denied(
+        principal,
+        input,
+        humanDecision.auditLogId,
+        "agent_principal_inactive",
+      );
+    }
+
+    return this.executePolicy(
+      principal,
+      agent.ownerUserId ?? context.userId,
+      false,
+      input,
+      () => resourceDecision?.auditLogId ?? humanDecision.auditLogId,
+    );
+  }
+
   executeAsAgent(
     identity: AgentRuntimeIdentity,
     agent: Agent,
@@ -434,6 +497,11 @@ export class AgentPolicyGateway {
     }).id;
   }
 }
+
+type OrchestrationAgentLike = Pick<Agent, "id" | "agentKey"> & {
+  principalId?: string | null;
+  ownerUserId?: string | null;
+};
 
 function isAdmin(context: AuthContext): boolean {
   return context.roleNames.some((role) => role.toLowerCase() === "admin");

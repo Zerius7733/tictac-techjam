@@ -6,7 +6,7 @@ import {
   setAppAuthToken,
   setSessionToken,
 } from "./api";
-import { OrchestrationPanel } from "./OrchestrationPanel";
+import { ProjectWorkspace } from "./ProjectWorkspace";
 import type {
   Agent,
   AgentActionLog,
@@ -332,11 +332,16 @@ function SecurityPanel({
               >
                 {resources.map((resource) => (
                   <option key={resource.resourceKey} value={resource.resourceKey}>
-                    {resource.resourceType} · {resource.resourceKey} · {resource.sensitivity}
+                    {resource.label} · {resource.sensitivity}
                   </option>
                 ))}
               </select>
             </label>
+            {selectedResource && (
+              <small className="security-resource-hint">
+                {selectedResource.description} <code>{selectedResource.resourceType}:{selectedResource.resourceKey}</code>
+              </small>
+            )}
             <div className="action-choice" role="group" aria-label="Capability action">
               {availableActions.map((option) => (
                 <button
@@ -437,7 +442,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [showOrchestration, setShowOrchestration] = useState(false);
+  const [showProjects, setShowProjects] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showSecurity, setShowSecurity] = useState(false);
   const [securitySetup, setSecuritySetup] = useState(false);
@@ -569,7 +574,6 @@ export default function App() {
       const { agent } = await api.createAgent(form);
       await refreshAgents();
       setSelectedId(agent.id);
-      setShowOrchestration(false);
       setShowCreate(false);
       setSecuritySetup(true);
       setShowSecurity(true);
@@ -592,6 +596,7 @@ export default function App() {
       setShowSettings(false);
       setShowSecurity(false);
       setSecuritySetup(false);
+      setShowProjects(false);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -842,17 +847,28 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand">
+        <button
+          type="button"
+          className="brand home-brand"
+          onClick={() => {
+            setShowProjects(false);
+            setShowCreate(false);
+            setShowSettings(false);
+            setShowSecurity(false);
+            setSecuritySetup(false);
+          }}
+          aria-label="Go to home"
+        >
           <div className="brand-mark">A</div>
           <div>
             <strong>Agent Launchpad</strong>
             <span>
               {system?.runtimeProvider === "container"
                 ? "Local container · Codex CLI"
-                : "ECS / Docker · Codex CLI"}
+              : "ECS / Docker · Codex CLI"}
             </span>
           </div>
-        </div>
+        </button>
 
         <button
           className="button button-primary create-button"
@@ -865,11 +881,13 @@ export default function App() {
         </button>
 
         <button
-          className="button button-ghost orchestration-nav-button"
-          onClick={() => setShowOrchestration(true)}
+          className={"button button-ghost projects-nav-button " + (showProjects ? "active" : "")}
+          onClick={() => {
+            setShowProjects(true);
+          }}
           disabled={busy}
         >
-          <span>⇄</span> Orchestration
+          <span>⌘</span> Projects
         </button>
 
         <div className="sidebar-label">
@@ -883,7 +901,7 @@ export default function App() {
               key={agent.id}
               onClick={() => {
                 setSelectedId(agent.id);
-                setShowOrchestration(false);
+                setShowProjects(false);
               }}
             >
               <div className="agent-avatar">{agent.name.slice(0, 1).toUpperCase()}</div>
@@ -948,8 +966,11 @@ export default function App() {
           </div>
         )}
 
-        {showOrchestration ? (
-          <OrchestrationPanel agents={agents} />
+        {showProjects && currentUser ? (
+          <ProjectWorkspace
+            currentUser={currentUser}
+            onRefreshAgents={refreshAgents}
+          />
         ) : selected ? (
           <>
             <header className="agent-header">

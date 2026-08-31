@@ -25,6 +25,7 @@ import type {
   OrchestrationAgentDirectory,
   OrchestrationDispatcher,
 } from "./orchestration-dispatcher.js";
+import { ProjectStore, type ProjectRole } from "./projects.js";
 
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
@@ -51,8 +52,27 @@ const loginBody = z.object({
 });
 const orchestrationBody = z.object({
   agentId: z.string().uuid(),
+  projectId: z.string().uuid().optional(),
   prompt: z.string().trim().min(1).max(50_000),
 });
+const projectIdParams = z.object({ id: z.string().uuid() });
+const projectAgentParams = z.object({ id: z.string().uuid(), agentId: z.string().uuid() });
+const projectInvitationParams = z.object({ id: z.string().uuid() });
+const projectInvitationRevokeParams = z.object({
+  id: z.string().uuid(),
+  invitationId: z.string().uuid(),
+});
+const projectUsersQuery = z.object({ query: z.string().trim().max(120).optional() });
+const createProjectBody = z.object({
+  name: z.string().trim().min(1).max(100),
+  description: z.string().trim().max(500).optional(),
+});
+const projectMemberBody = z.object({
+  userId: z.string().uuid().optional(),
+  username: z.string().trim().min(1).max(120).optional(),
+  role: z.enum(["editor", "viewer"]).default("editor"),
+}).refine((value) => Boolean(value.userId || value.username), "A collaborator is required");
+const projectAgentBody = z.object({ agentId: z.string().uuid() });
 const orchestrationIdParams = z.object({ id: z.string().uuid() });
 const orchestrationCancelBody = z.object({
   reason: z.string().trim().min(1).max(160).optional(),
@@ -179,9 +199,19 @@ function isAdmin(request: FastifyRequest): boolean {
   return request.auth?.roleNames.some((role) => role.toLowerCase() === "admin") ?? false;
 }
 
-function ownsJob(job: OrchestrationJob, request: FastifyRequest): boolean {
+function ownsJob(
+  job: OrchestrationJob,
+  request: FastifyRequest,
+  projectStore?: ProjectStore,
+): boolean {
   if (!authEnabled(request)) return true;
-  return isAdmin(request) || job.userId === request.auth?.userId;
+  return Boolean(
+    isAdmin(request) ||
+      job.userId === request.auth?.userId ||
+      (job.projectId &&
+        request.auth &&
+        projectStore?.canViewProject(job.projectId, request.auth.userId)),
+  );
 }
 
 function authEnabled(request: FastifyRequest): boolean {
@@ -269,6 +299,7 @@ export async function createApp(
   authStore?: AuthStore,
   orchestrationOrPolicy?: OrchestrationHttpDependencies | AgentPolicyGateway,
   policyGatewayArg?: AgentPolicyGateway,
+  projectStore?: ProjectStore,
 ): Promise<FastifyInstance> {
   const orchestration =
     orchestrationOrPolicy && "repository" in orchestrationOrPolicy
@@ -415,6 +446,145 @@ export async function createApp(
 
   app.get("/api/system", async () => service.systemInfo());
 
+  app.get("/api/projects", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    return {
+      projects: projectStore.listProjects(
+        request.auth.userId,
+        isAdmin(request),
+      ),
+    };
+  });
+
+  app.post("/api/projects", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const body = createProjectBody.parse(request.body);
+    const project = await projectStore.createProject(
+      request.auth.userId,
+      body.name,
+      body.description,
+    );
+    return reply.code(201).send({ project });
+  });
+
+  app.get("/api/project-invitations", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    return { invitations: projectStore.listIncomingInvitations(request.auth.userId) };
+  });
+
+  app.post("/api/project-invitations/:id/accept", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id } = projectInvitationParams.parse(request.params);
+    return { project: projectStore.acceptInvitation(id, request.auth.userId) };
+  });
+
+  app.post("/api/project-invitations/:id/decline", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id } = projectInvitationParams.parse(request.params);
+    projectStore.declineInvitation(id, request.auth.userId);
+    return { ok: true };
+  });
+
+  app.get("/api/projects/:id", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id } = projectIdParams.parse(request.params);
+    return { project: projectStore.getProject(id, request.auth.userId, isAdmin(request)) };
+  });
+
+  app.get("/api/projects/:id/collaborator-candidates", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id } = projectIdParams.parse(request.params);
+    const query = projectUsersQuery.parse(request.query);
+    return {
+      users: projectStore.listCollaboratorCandidates(
+        id,
+        request.auth.userId,
+        query.query,
+      ),
+    };
+  });
+
+  app.delete("/api/projects/:id", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id } = projectIdParams.parse(request.params);
+    await projectStore.deleteProject(id, request.auth.userId);
+    return { ok: true, projectId: id };
+  });
+
+  app.post("/api/projects/:id/members", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id } = projectIdParams.parse(request.params);
+    const body = projectMemberBody.parse(request.body);
+    const project = projectStore.inviteMember(
+      id,
+      request.auth.userId,
+      body.userId ?? body.username ?? "",
+      body.role as Exclude<ProjectRole, "owner">,
+    );
+    return { project };
+  });
+
+  app.delete("/api/projects/:id/invitations/:invitationId", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id, invitationId } = projectInvitationRevokeParams.parse(request.params);
+    return {
+      project: projectStore.revokeInvitation(id, request.auth.userId, invitationId),
+    };
+  });
+
+  app.delete("/api/projects/:id/members/:userId", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id, userId } = z
+      .object({ id: z.string().uuid(), userId: z.string().uuid() })
+      .parse(request.params);
+    return {
+      project: projectStore.removeMember(id, request.auth.userId, userId),
+    };
+  });
+
+  app.post("/api/projects/:id/agents", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id } = projectIdParams.parse(request.params);
+    const body = projectAgentBody.parse(request.body);
+    return {
+      project: projectStore.addAgent(id, request.auth.userId, body.agentId),
+    };
+  });
+
+  app.delete("/api/projects/:id/agents/:agentId", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id, agentId } = projectAgentParams.parse(request.params);
+    return {
+      project: projectStore.removeAgent(id, request.auth.userId, agentId),
+    };
+  });
+
   app.get("/api/agents", async (request, reply) => {
     if (!requirePermission(request, reply, authStore, "view", "agent", "*")) return;
     const access = agentAccess(request, authStore);
@@ -542,6 +712,25 @@ export async function createApp(
     const body = orchestrationBody.parse(request.body);
     const agent = orchestration.agents.getAgentById(body.agentId);
     if (!agent) return reply.code(404).send({ error: "Agent not found" });
+    if (body.projectId) {
+      if (!projectStore || !request.auth) {
+        return reply.code(503).send({ error: "Project collaboration is not configured" });
+      }
+      if (!projectStore.canUseAgent(body.projectId, request.auth.userId, agent.id, isAdmin(request))) {
+        return reply.code(403).send({
+          error: "Agent is not participating in this project",
+          reasonCode: "agent_not_in_project",
+        });
+      }
+    } else if (
+      request.auth &&
+      !isAdmin(request) &&
+      agent.ownerUserId !== undefined &&
+      agent.ownerUserId !== null &&
+      agent.ownerUserId !== request.auth.userId
+    ) {
+      return reply.code(404).send({ error: "Agent not found" });
+    }
     if (agent.status !== "ready") {
       return reply.code(409).send({ error: "Agent is not ready" });
     }
@@ -564,6 +753,7 @@ export async function createApp(
       created = await orchestration.repository.createRootJob({
         requestId: context.requestId,
         userId: authStore ? context.userId : null,
+        projectId: body.projectId ?? null,
         inputText: body.prompt,
         agentId: body.agentId,
         prompt: body.prompt,
@@ -603,7 +793,7 @@ export async function createApp(
     const job = orchestration.repository.getJob(id);
     if (!job) return reply.code(404).send({ error: "Orchestration not found" });
     if (!(await requireOrchestrationPermission(request, reply, authStore, orchestration, "view", "orchestration", id))) return;
-    if (!ownsJob(job, request)) return reply.code(404).send({ error: "Orchestration not found" });
+    if (!ownsJob(job, request, projectStore)) return reply.code(404).send({ error: "Orchestration not found" });
     return {
       job,
       runs: orchestration.repository.listRuns(job.id).map(publicRun),
@@ -618,7 +808,7 @@ export async function createApp(
     const job = orchestration.repository.getJob(id);
     if (!job) return reply.code(404).send({ error: "Orchestration not found" });
     if (!(await requireOrchestrationPermission(request, reply, authStore, orchestration, "view", "orchestration", id))) return;
-    if (!ownsJob(job, request)) return reply.code(404).send({ error: "Orchestration not found" });
+    if (!ownsJob(job, request, projectStore)) return reply.code(404).send({ error: "Orchestration not found" });
     return {
       messages: orchestration.repository.listMessages(job.id).map(publicMessage),
     };
@@ -632,7 +822,12 @@ export async function createApp(
     const job = orchestration.repository.getJob(id);
     if (!job) return reply.code(404).send({ error: "Orchestration not found" });
     if (!(await requireOrchestrationPermission(request, reply, authStore, orchestration, "cancel", "orchestration", id))) return;
-    if (!ownsJob(job, request)) return reply.code(404).send({ error: "Orchestration not found" });
+    if (
+      !ownsJob(job, request, projectStore) &&
+      !(job.projectId && request.auth && projectStore?.canEditProject(job.projectId, request.auth.userId, isAdmin(request)))
+    ) {
+      return reply.code(404).send({ error: "Orchestration not found" });
+    }
     const body = orchestrationCancelBody.parse(request.body ?? {});
     const cancelled = await orchestration.dispatcher.cancelJob(id, body.reason);
     return { job: cancelled };

@@ -12,6 +12,10 @@ import type {
   OrchestrationMessage,
   OrchestrationRun,
   PolicyAction,
+  ProjectDetails,
+  ProjectInvitation,
+  ProjectUserCandidate,
+  ProjectSummary,
   SystemInfo,
 } from "./types";
 
@@ -171,7 +175,7 @@ export const api = {
       },
     ),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
-  createOrchestration: (body: { agentId: string; prompt: string }) =>
+  createOrchestration: (body: { agentId: string; prompt: string; projectId?: string }) =>
     request<{
       requestId: string;
       job: OrchestrationJob;
@@ -181,6 +185,63 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  listProjects: () => request<{ projects: ProjectSummary[] }>("/api/projects"),
+  createProject: (body: { name: string; description?: string }) =>
+    request<{ project: ProjectDetails }>("/api/projects", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  project: (id: string) =>
+    request<{ project: ProjectDetails }>("/api/projects/" + id),
+  listProjectInvitations: () =>
+    request<{ invitations: ProjectInvitation[] }>("/api/project-invitations"),
+  acceptProjectInvitation: (invitationId: string) =>
+    request<{ project: ProjectDetails }>(
+      "/api/project-invitations/" + invitationId + "/accept",
+      { method: "POST" },
+    ),
+  declineProjectInvitation: (invitationId: string) =>
+    request<{ ok: boolean }>(
+      "/api/project-invitations/" + invitationId + "/decline",
+      { method: "POST" },
+    ),
+  listProjectCollaboratorCandidates: (projectId: string, query = "") =>
+    request<{ users: ProjectUserCandidate[] }>(
+      "/api/projects/" + projectId + "/collaborator-candidates" +
+        (query.trim() ? "?query=" + encodeURIComponent(query.trim()) : ""),
+    ),
+  deleteProject: (id: string) =>
+    request<{ ok: boolean; projectId: string }>("/api/projects/" + id, {
+      method: "DELETE",
+    }),
+  addProjectMember: (
+    id: string,
+    body: { userId?: string; username?: string; role: "editor" | "viewer" },
+  ) =>
+    request<{ project: ProjectDetails }>("/api/projects/" + id + "/members", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  revokeProjectInvitation: (projectId: string, invitationId: string) =>
+    request<{ project: ProjectDetails }>(
+      "/api/projects/" + projectId + "/invitations/" + invitationId,
+      { method: "DELETE" },
+    ),
+  removeProjectMember: (projectId: string, userId: string) =>
+    request<{ project: ProjectDetails }>(
+      "/api/projects/" + projectId + "/members/" + userId,
+      { method: "DELETE" },
+    ),
+  addProjectAgent: (projectId: string, agentId: string) =>
+    request<{ project: ProjectDetails }>("/api/projects/" + projectId + "/agents", {
+      method: "POST",
+      body: JSON.stringify({ agentId }),
+    }),
+  removeProjectAgent: (projectId: string, agentId: string) =>
+    request<{ project: ProjectDetails }>(
+      "/api/projects/" + projectId + "/agents/" + agentId,
+      { method: "DELETE" },
+    ),
   orchestration: (id: string) =>
     request<{ job: OrchestrationJob; runs: OrchestrationRun[] }>(
       "/api/orchestrations/" + id,

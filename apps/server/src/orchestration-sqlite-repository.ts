@@ -48,10 +48,31 @@ const archivedAgentMigration: SqliteMigration = {
   path: path.join(repositoryRoot, "db/migrations/010_archived_agents.sql"),
 };
 
+const projectCollaborationMigration: SqliteMigration = {
+  version: 12,
+  name: "012_project_collaboration.sql",
+  path: path.join(repositoryRoot, "db/migrations/012_project_collaboration.sql"),
+};
+
+const projectInvitationsMigration: SqliteMigration = {
+  version: 13,
+  name: "013_project_invitations.sql",
+  path: path.join(repositoryRoot, "db/migrations/013_project_invitations.sql"),
+};
+
+const seededProjectInvitationRepairMigration: SqliteMigration = {
+  version: 14,
+  name: "014_reconcile_seeded_project_invitation.sql",
+  path: path.join(repositoryRoot, "db/migrations/014_reconcile_seeded_project_invitation.sql"),
+};
+
 export const orchestrationMigrations: readonly SqliteMigration[] = [
   defaultMigration,
   waitingRunMigration,
   archivedAgentMigration,
+  projectCollaborationMigration,
+  projectInvitationsMigration,
+  seededProjectInvitationRepairMigration,
 ];
 
 type SqlRow = Record<string, unknown>;
@@ -85,13 +106,14 @@ export class SqliteOrchestrationRepository implements OrchestrationRepository {
       this.db()
         .prepare(
           `INSERT INTO orchestration_jobs
-             (id, request_id, user_id, input_text, input_json, status, created_at)
-           VALUES (?, ?, ?, ?, ?, 'queued', ?)`,
+             (id, request_id, user_id, project_id, input_text, input_json, status, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`,
         )
         .run(
           jobId,
           input.requestId,
           input.userId,
+          input.projectId ?? null,
           input.inputText,
           serializeJson(input.inputJson ?? {}),
           createdAt,
@@ -777,6 +799,7 @@ function toJob(row: SqlRow): OrchestrationJob {
     id: String(row.id),
     requestId: String(row.request_id),
     userId: row.user_id === null ? null : String(row.user_id),
+    projectId: row.project_id === null || row.project_id === undefined ? null : String(row.project_id),
     inputText: String(row.input_text),
     inputJson: parseJson(row.input_json),
     status: row.status as OrchestrationJob["status"],

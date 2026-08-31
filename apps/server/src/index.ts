@@ -16,6 +16,7 @@ import { SqliteOrchestrationRepository } from "./orchestration-sqlite-repository
 import { importLegacyAgentData, SqliteAgentStore } from "./sqlite-agent-store.js";
 import { JsonStore } from "./store.js";
 import { WorkspaceManager } from "./workspace.js";
+import { ProjectStore } from "./projects.js";
 
 const config = loadConfig();
 await writeCodexConfig(config);
@@ -41,12 +42,17 @@ await service.initialize();
 
 const agentDirectory = new AgentStoreDirectory(store);
 const authorizer = new AuthStoreAuthorizer(authStore);
+const projectStore = new ProjectStore(config.authDatabasePath, config.workspaceRoot);
+await projectStore.initialize(config.nodeEnv !== "production");
 const dispatcher = new OrchestrationDispatcher(
   orchestrationRepository,
   agentDirectory,
   authorizer,
   runner,
-  { resourceProvider: new AllowlistedResourceProvider() },
+  {
+    resourceProvider: new AllowlistedResourceProvider(policyGateway),
+    projectAccess: projectStore,
+  },
 );
 const app = await createApp(
   config,
@@ -59,6 +65,7 @@ const app = await createApp(
     authorizer,
   },
   policyGateway,
+  projectStore,
 );
 
 const shutdown = async (signal: string) => {
@@ -68,6 +75,7 @@ const shutdown = async (signal: string) => {
   } finally {
     store.close();
     orchestrationRepository.close();
+    projectStore.close();
     policyStore.close();
     authStore.close();
   }

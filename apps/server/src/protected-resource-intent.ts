@@ -36,8 +36,33 @@ const resourceAliases: Array<{
   },
   {
     resourceType: "data_asset",
+    resourceKey: "backend-api-contract",
+    pattern: /\bbackend[- ]api[- ]contract\b|\bbackend[- ]contract\b|\border[- ]service[- ]api\b/i,
+  },
+  {
+    resourceType: "data_asset",
+    resourceKey: "frontend-design-system",
+    pattern: /\bfrontend[- ]design[- ]system\b|\bui[- ]design[- ]tokens?\b/i,
+  },
+  {
+    resourceType: "data_asset",
+    resourceKey: "shared-project-status",
+    pattern: /\bshared[- ]project[- ]status\b|\bproject[- ]status\b/i,
+  },
+  {
+    resourceType: "data_asset",
     resourceKey: "customer-records",
     pattern: /\bcustomer[- ]records?\b|\bcustomer[- ]data\b/i,
+  },
+  {
+    resourceType: "mock_record",
+    resourceKey: "alice-frontend-secrets",
+    pattern: /\balice(?:['’]s|s)?[- ]frontend[- ]secrets?\b|\bfrontend[- ]secrets?\b/i,
+  },
+  {
+    resourceType: "mock_record",
+    resourceKey: "bob-backend-secrets",
+    pattern: /\bbob(?:['’]s|s)?[- ]backend[- ]secrets?\b|\bbackend[- ]secrets?\b/i,
   },
 ];
 

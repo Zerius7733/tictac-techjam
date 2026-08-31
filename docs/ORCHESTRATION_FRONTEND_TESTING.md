@@ -5,10 +5,11 @@ control plane. It covers the Agent setup, server-owned Agent keys, the shared
 SQLite database, a successful delegation, a denied protected-resource request,
 and cancellation.
 
-The current UI can verify the orchestration job lifecycle and run timeline.
-The complete cross-user Alice/Bob demo still depends on the authorization
-integration and does not yet have a dedicated frontend setup screen for
-cross-owner Agent delegation.
+All orchestration runs now start inside a selected project. The project
+workspace is the shared boundary for the root Agent, participating Agents,
+and project-scoped permissions. Use the dedicated
+[project collaboration guide](PROJECT_COLLABORATION.md) for the recommended
+two-browser test.
 
 ## Workflow
 
@@ -18,7 +19,7 @@ flowchart TD
     B --> C[Create or select ready Agents]
     C --> D[Read Bob's agent_key from SQLite]
     D --> E[Configure credentials and data_asset capability]
-    E --> F[Open Orchestration playground]
+    E --> F[Open Projects and select a project]
     F --> G[Start root Alice Frontend run]
     G --> H{Agent command}
     H -->|final| I[Job completes]
@@ -102,10 +103,11 @@ cross-owner authorization configuration.
 3. Sign in as Bob and create `Bob Order Service`.
 4. Confirm Bob's Agent is **ready**.
 
-In this mode, Alice normally cannot see Bob's Agent in her Agent list because
-Agent ownership is enforced. The orchestration authorization contributor must
-provide the cross-Agent invocation/delegation rule before this becomes a
-complete Alice/Bob frontend demo.
+In this mode, Alice should not see Bob's Agent in her personal Agent list
+because Agent ownership is enforced. Open **Projects** instead: Bob must first
+accept the project invitation and then, from his own account, use **Assign your
+Agent to this project**. Alice can use Bob's Agent only after Bob has explicitly
+assigned it to the shared project.
 
 ## 3.1 Recommended first test: one user, two Agents
 
@@ -218,7 +220,8 @@ target key.
 
 ### Step 7: run a final-response smoke test first
 
-Click **Orchestration** in the sidebar. Select `Alice Frontend` as the Root
+Open **Projects**, select a project with `Alice Frontend` participating, then
+use the **Project orchestration** form. Select `Alice Frontend` as the Root
 Agent and submit:
 
 ```text
@@ -349,11 +352,10 @@ Agent to execute.
 3. Create `Bob Order Service` and add the Bob instructions from Section 4.
 4. Confirm the Agent status is **ready**.
 
-The seeded Bob account is a viewer and normally cannot create an Agent. If the
-**Create Agent** action returns `403`, this is expected policy behavior. Have
-an admin/authorization contributor provision Bob's Agent, or temporarily grant
-Bob the required Agent-creation capability in a development database. Do not
-weaken the production policy just to run this test.
+The seeded Bob account is a developer in the collaboration demo, so he can
+create his own Agent. His Agent is still independent: Alice cannot see it in
+her personal Agent list, and Alice cannot manage Bob's credential or
+capabilities.
 
 ### Read Bob's key
 
@@ -395,8 +397,8 @@ server-owned key in Alice's structured command.
 
 ### Start the cross-user orchestration
 
-In Alice's **Orchestration playground**, replace `<BOB_AGENT_KEY>` with the
-value read from SQLite and submit:
+In Alice's project workspace, replace `<BOB_AGENT_KEY>` with the value read
+from SQLite and submit:
 
 ```text
 Ask the order-service Agent with key <BOB_AGENT_KEY> for the approved,
@@ -556,8 +558,9 @@ Data assets are read-only. The intended negative case is that a request for
 
 ## 7. Run a basic orchestration smoke test
 
-1. Click **Orchestration** in the left sidebar.
-2. Select a ready root Agent. Use `Alice Frontend` for the demo.
+1. Click **Projects** in the left sidebar and select a project.
+2. In **Project orchestration**, select a ready root Agent. Use `Alice Frontend`
+   for the demo.
 3. Enter:
 
    ```text

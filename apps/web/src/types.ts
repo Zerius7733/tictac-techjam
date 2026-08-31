@@ -77,6 +77,7 @@ export interface OrchestrationJob {
   id: string;
   requestId: string;
   userId: string | null;
+  projectId: string | null;
   inputText: string;
   status: OrchestrationJobStatus;
   outputText: string | null;
@@ -84,6 +85,89 @@ export interface OrchestrationJob {
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
+}
+
+export type ProjectRole = "owner" | "editor" | "viewer";
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  ownerUserId: string;
+  workspacePath: string;
+  currentRole: ProjectRole;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectMember {
+  projectId: string;
+  userId: string;
+  username: string;
+  displayName: string | null;
+  role: ProjectRole;
+  invitedByUserId: string | null;
+  createdAt: string;
+}
+
+export interface ProjectUserCandidate {
+  id: string;
+  username: string;
+  displayName: string | null;
+}
+
+export interface ProjectInvitation {
+  id: string;
+  projectId: string;
+  projectName: string;
+  projectDescription: string;
+  userId: string;
+  username: string;
+  displayName: string | null;
+  role: Exclude<ProjectRole, "owner">;
+  invitedByUserId: string;
+  invitedByUsername: string;
+  invitedByDisplayName: string | null;
+  status: "pending" | "accepted" | "declined" | "revoked";
+  createdAt: string;
+  respondedAt: string | null;
+}
+
+export interface ProjectAgent {
+  projectId: string;
+  agentId: string;
+  agentKey: string;
+  name: string;
+  description: string;
+  ownerUserId: string | null;
+  ownerUsername: string | null;
+  status: AgentStatus;
+  addedByUserId: string;
+  createdAt: string;
+}
+
+export interface ProjectAgentCandidate {
+  agentId: string;
+  agentKey: string;
+  name: string;
+  description: string;
+  ownerUserId: string | null;
+  ownerUsername: string | null;
+  principalId: string | null;
+  workspacePath: string;
+  status: AgentStatus;
+}
+
+export interface ProjectSummary extends Project {
+  memberCount: number;
+  agentCount: number;
+}
+
+export interface ProjectDetails extends Project {
+  members: ProjectMember[];
+  agents: ProjectAgent[];
+  availableAgents: ProjectAgentCandidate[];
+  pendingInvitations: ProjectInvitation[];
 }
 
 export interface OrchestrationRun {
@@ -130,6 +214,8 @@ export interface MockResource {
   id: string;
   resourceType: string;
   resourceKey: string;
+  label: string;
+  description: string;
   ownerUserId: string | null;
   sensitivity: "private" | "shared";
   /** Resource listings intentionally omit protected values. */

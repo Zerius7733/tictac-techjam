@@ -122,6 +122,7 @@ export class InMemoryOrchestrationRepository implements OrchestrationRepository 
       id: randomUUID(),
       requestId: input.requestId,
       userId: input.userId,
+      projectId: input.projectId ?? null,
       inputText: input.inputText,
       inputJson: structuredClone(input.inputJson ?? {}),
       status: "queued",

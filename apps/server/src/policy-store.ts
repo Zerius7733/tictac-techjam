@@ -43,6 +43,8 @@ export interface MockResource {
   id: string;
   resourceType: string;
   resourceKey: string;
+  label: string;
+  description: string;
   ownerUserId: string | null;
   sensitivity: "private" | "shared";
   value: string;
@@ -286,15 +288,20 @@ export class PolicyStore {
          ORDER BY resource_key`,
       )
       .all(includeAll ? 1 : 0, ownerUserId) as unknown as MockResourceRow[];
-    return rows.map(({ value: _value, ...resource }) => ({
-      id: resource.id,
-      resourceType: resource.resource_type,
-      resourceKey: resource.resource_key,
-      ownerUserId: resource.owner_user_id,
-      sensitivity: resource.sensitivity,
-      createdAt: resource.created_at,
-      updatedAt: resource.updated_at,
-    }));
+    return rows.map(({ value: _value, ...resource }) => {
+      const metadata = resourceMetadata(resource.resource_type, resource.resource_key);
+      return {
+        id: resource.id,
+        resourceType: resource.resource_type,
+        resourceKey: resource.resource_key,
+        label: metadata.label,
+        description: metadata.description,
+        ownerUserId: resource.owner_user_id,
+        sensitivity: resource.sensitivity,
+        createdAt: resource.created_at,
+        updatedAt: resource.updated_at,
+      };
+    });
   }
 
   updateMockResource(resourceType: string, resourceKey: string, value: string): MockResource | null {
@@ -383,15 +390,70 @@ function toCapability(row: CapabilityRow): AgentCapability {
 }
 
 function toMockResource(row: MockResourceRow): MockResource {
+  const metadata = resourceMetadata(row.resource_type, row.resource_key);
   return {
     id: row.id,
     resourceType: row.resource_type,
     resourceKey: row.resource_key,
+    label: metadata.label,
+    description: metadata.description,
     ownerUserId: row.owner_user_id,
     sensitivity: row.sensitivity,
     value: row.value,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+function resourceMetadata(resourceType: string, resourceKey: string): {
+  label: string;
+  description: string;
+} {
+  const known: Record<string, { label: string; description: string }> = {
+    "order-schema": {
+      label: "Approved order schema",
+      description: "Sanitized order fields that are safe for dashboard work.",
+    },
+    "backend-api-contract": {
+      label: "Backend API contract",
+      description: "Approved endpoints and response fields for the order service.",
+    },
+    "frontend-design-system": {
+      label: "Frontend design system",
+      description: "Shared UI tokens and components for the project.",
+    },
+    "shared-project-status": {
+      label: "Shared project status",
+      description: "A non-sensitive status artifact available to project collaborators.",
+    },
+    "customer-records": {
+      label: "Customer records",
+      description: "Restricted customer data; never needed for the dashboard schema.",
+    },
+    "alice-private-note": {
+      label: "Alice's private notes",
+      description: "Alice-only demo content for testing owner isolation.",
+    },
+    "bob-private-note": {
+      label: "Bob's private notes",
+      description: "Bob-only demo content for testing owner isolation.",
+    },
+    "alice-frontend-secrets": {
+      label: "Alice's frontend secrets",
+      description: "Private frontend configuration that must stay with Alice's Agent.",
+    },
+    "bob-backend-secrets": {
+      label: "Bob's backend secrets",
+      description: "Private backend configuration that must stay with Bob's Agent.",
+    },
+    "shared-status": {
+      label: "Shared status note",
+      description: "Shared mock content for testing explicit Agent grants.",
+    },
+  };
+  return known[resourceKey] ?? {
+    label: resourceKey.replaceAll("-", " "),
+    description: `${resourceType} resource available for policy testing.`,
   };
 }
 

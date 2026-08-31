@@ -30,6 +30,9 @@ Volcengine ECS.
 - Fastify control plane with asynchronous Run state
 - Database-backed Alice/Bob login, Agent ownership, delegated capabilities,
   and revocable Agent credentials
+- Shared projects with collaborator roles, explicit participating Agents, and
+  project-scoped orchestration workspaces
+- Human-named mock protected resources for testing least-privilege delegation
 - Persistent Agent workspaces and Codex sessions
 - Disposable Docker, Colima, or Podman container for each local turn
 - Docker and Terraform deployment paths for Volcengine ECS
@@ -110,6 +113,8 @@ token first and then sign in with one of these accounts.
 
 To demonstrate the full authentication and Agent policy boundary, follow the
 [authentication verification guide](docs/AUTHENTICATION_VERIFICATION.md).
+For the Alice/Bob project workflow, see the
+[project collaboration guide](docs/PROJECT_COLLABORATION.md).
 
 ### 5. Stop and resume
 

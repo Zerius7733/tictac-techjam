@@ -32,9 +32,17 @@ export interface OrchestrationAgentDirectory {
   listAgents?(context: AuthContext): OrchestrationAgentDescriptor[];
 }
 
+export interface OrchestrationProjectAccess {
+  canUseAgent(projectId: string, userId: string, agentId: string): boolean;
+  listAgents(projectId: string, userId: string): OrchestrationAgentDescriptor[];
+  workspacePath(projectId: string): string;
+}
+
 export interface OrchestrationAgentDescriptor {
   id: string;
   agentKey: string;
+  ownerUserId?: string | null;
+  principalId?: string | null;
   /** Display label used to make the delegation roster understandable to the model. */
   name?: string;
   workspacePath: string;
@@ -48,10 +56,12 @@ export class AgentStoreDirectory implements OrchestrationAgentDirectory {
   getAgentById(agentId: string): OrchestrationAgentDescriptor | null {
     const directory = this.store as AgentStore & {
       getAgentById?: (id: string) => {
-        id: string;
-        agentKey: string;
-        name: string;
-        workspacePath: string;
+      id: string;
+      agentKey: string;
+      name: string;
+      ownerUserId?: string | null;
+      principalId?: string | null;
+      workspacePath: string;
         status: AgentStatus;
       } | null;
     };
@@ -64,10 +74,12 @@ export class AgentStoreDirectory implements OrchestrationAgentDirectory {
   getAgentByKey(agentKey: string): OrchestrationAgentDescriptor | null {
     const directory = this.store as AgentStore & {
       getAgentByKey?: (key: string) => {
-        id: string;
-        agentKey: string;
-        name: string;
-        workspacePath: string;
+      id: string;
+      agentKey: string;
+      name: string;
+      ownerUserId?: string | null;
+      principalId?: string | null;
+      workspacePath: string;
         status: AgentStatus;
       } | null;
     };
@@ -120,6 +132,8 @@ export interface OrchestrationDispatcherOptions {
   jobTimeoutMs?: number | null;
   /** Optional allowlisted provider for protected resource requests. */
   resourceProvider?: ResourceProvider;
+  /** Optional project boundary for cross-account Agent participation. */
+  projectAccess?: OrchestrationProjectAccess;
   logger?: OrchestrationLogger;
 }
 
@@ -140,6 +154,7 @@ export class OrchestrationDispatcher {
   private readonly runTimeoutMs: number | null;
   private readonly jobTimeoutMs: number | null;
   private readonly resourceProvider: ResourceProvider | null;
+  private readonly projectAccess: OrchestrationProjectAccess | null;
   private readonly logger: OrchestrationLogger;
   private readonly activeJobs = new Map<string, Map<string, string>>();
 
@@ -155,6 +170,7 @@ export class OrchestrationDispatcher {
     this.runTimeoutMs = timeoutOption(options.runTimeoutMs, 600_000);
     this.jobTimeoutMs = timeoutOption(options.jobTimeoutMs, 1_800_000);
     this.resourceProvider = options.resourceProvider ?? null;
+    this.projectAccess = options.projectAccess ?? null;
     this.logger = options.logger ?? noopLogger;
   }
 
@@ -173,6 +189,14 @@ export class OrchestrationDispatcher {
     const rootAgent = this.agents.getAgentById(root.agentId);
     if (!rootAgent) {
       await this.failRoot(job.id, root, "agent_not_found");
+      return this.requireJob(job.id);
+    }
+    if (
+      job.projectId &&
+      (!this.projectAccess ||
+        !this.projectAccess.canUseAgent(job.projectId, input.authContext.userId, rootAgent.id))
+    ) {
+      await this.failRoot(job.id, root, "agent_not_in_project");
       return this.requireJob(job.id);
     }
     const decision = await this.authorizer.authorize(
@@ -438,6 +462,7 @@ export class OrchestrationDispatcher {
       authContext,
       depth,
       ancestry,
+      this.repository.getJob(run.jobId)?.projectId ?? null,
     );
     if (denial) {
       return this.resumeWithEnvelope(
@@ -457,7 +482,9 @@ export class OrchestrationDispatcher {
           requestId: authContext.requestId,
           jobId: run.jobId,
           runId: run.id,
-          agentId: run.agentId,
+          agentId: target!.id,
+          authContext,
+          agent: target!,
           action: command.action,
           resourceType: command.resourceType,
           resourceKey: command.resourceKey,
@@ -556,6 +583,7 @@ export class OrchestrationDispatcher {
     authContext: AuthContext,
     depth: number,
     ancestry: Set<string>,
+    projectId: string | null,
   ) {
     let reasonCode: string | null = null;
     if (!target) reasonCode = "agent_not_found";
@@ -566,6 +594,12 @@ export class OrchestrationDispatcher {
       reasonCode = "delegation_depth_exceeded";
     } else if (this.repository.listRuns(run.jobId).length >= this.maxRuns) {
       reasonCode = "run_limit_exceeded";
+    } else if (
+      projectId &&
+      (!this.projectAccess ||
+        !this.projectAccess.canUseAgent(projectId, authContext.userId, target!.id))
+    ) {
+      reasonCode = "agent_not_in_project";
     }
 
     const decision =
@@ -671,12 +705,10 @@ export class OrchestrationDispatcher {
       const result = await this.runWithTimeout(
         {
           agentId: agent.id,
-          workspacePath: agent.workspacePath,
+          workspacePath: this.workspaceForRun(run),
           prompt: structuredPrompt(
             prompt,
-            this.agents
-              .listAgents?.(authContext)
-              .filter((candidate) => candidate.id !== agent.id),
+            this.availableAgentsForRun(run, authContext, agent.id),
           ),
           threadId,
           requestId: authContext.requestId,
@@ -702,6 +734,25 @@ export class OrchestrationDispatcher {
     } finally {
       this.unregisterActive(run.jobId, run.id);
     }
+  }
+
+  private workspaceForRun(run: OrchestrationRun): string {
+    const projectId = this.repository.getJob(run.jobId)?.projectId;
+    return projectId && this.projectAccess
+      ? this.projectAccess.workspacePath(projectId)
+      : this.agents.getAgentById(run.agentId)?.workspacePath ?? "";
+  }
+
+  private availableAgentsForRun(
+    run: OrchestrationRun,
+    context: AuthContext,
+    currentAgentId: string,
+  ): OrchestrationAgentDescriptor[] {
+    const projectId = this.repository.getJob(run.jobId)?.projectId;
+    const available = projectId && this.projectAccess
+      ? this.projectAccess.listAgents(projectId, context.userId)
+      : this.agents.listAgents?.(context) ?? [];
+    return available.filter((candidate) => candidate.id !== currentAgentId);
   }
 
   private async runWithTimeout(
@@ -884,6 +935,8 @@ function toDescriptor(agent: {
   id: string;
   agentKey?: string;
   name?: string;
+  ownerUserId?: string | null;
+  principalId?: string | null;
   workspacePath: string;
   status: AgentStatus;
 }): OrchestrationAgentDescriptor {
@@ -891,6 +944,8 @@ function toDescriptor(agent: {
     id: agent.id,
     agentKey: agent.agentKey || `legacy-${agent.id}`,
     ...(agent.name ? { name: agent.name } : {}),
+    ...(agent.ownerUserId !== undefined ? { ownerUserId: agent.ownerUserId } : {}),
+    ...(agent.principalId !== undefined ? { principalId: agent.principalId } : {}),
     workspacePath: agent.workspacePath,
     status: agent.status,
   };

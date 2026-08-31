@@ -50,8 +50,8 @@ describe("AuthStore", () => {
     const bob = store.authenticate(bobLogin!.sessionToken, "request-bob-invoke");
     const decision = store.authorize(bob!, "invoke", "agent", "any-agent");
 
-    expect(bob?.roleNames).toEqual(["viewer"]);
-    expect(decision).toMatchObject({ allowed: false, reasonCode: "permission_missing" });
+    expect(bob?.roleNames).toEqual(["developer"]);
+    expect(decision).toMatchObject({ allowed: true, reasonCode: "permission_granted" });
     expect(store.count("audit_logs")).toBe(3);
     store.close();
   });

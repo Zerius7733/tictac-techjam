@@ -8,7 +8,17 @@ import type {
 } from "./types";
 
 interface OrchestrationPanelProps {
-  agents: Agent[];
+  agents: OrchestrationAgentOption[];
+  projectId?: string;
+  projectName?: string;
+}
+
+export interface OrchestrationAgentOption {
+  id: string;
+  agentKey: string;
+  name: string;
+  status: Agent["status"];
+  ownerLabel?: string;
 }
 
 const activeStatuses = new Set(["queued", "running", "waiting"]);
@@ -115,15 +125,13 @@ function ExpandableOutput({ summary, raw, expanded, onToggle }: ExpandableOutput
   );
 }
 
-export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
+export function OrchestrationPanel({ agents, projectId, projectName }: OrchestrationPanelProps) {
   const availableAgents = useMemo(
     () => agents.filter((agent) => agent.status !== "archived"),
     [agents],
   );
-  const [agentId, setAgentId] = useState(availableAgents[0]?.id ?? "");
-  const [prompt, setPrompt] = useState(
-    "Build an order dashboard. Ask the order-service Agent for the approved schema and do not request customer records.",
-  );
+  const [agentId, setAgentId] = useState("");
+  const [prompt, setPrompt] = useState("");
   const [job, setJob] = useState<OrchestrationJob | null>(null);
   const [runs, setRuns] = useState<OrchestrationRun[]>([]);
   const [messages, setMessages] = useState<OrchestrationMessage[]>([]);
@@ -133,7 +141,7 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
 
   useEffect(() => {
     if (!availableAgents.some((agent) => agent.id === agentId)) {
-      setAgentId(availableAgents[0]?.id ?? "");
+      setAgentId("");
     }
   }, [agentId, availableAgents]);
 
@@ -175,6 +183,7 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
       const created = await api.createOrchestration({
         agentId,
         prompt: prompt.trim(),
+        ...(projectId ? { projectId } : {}),
       });
       setJob(created.job);
       setRuns([created.run]);
@@ -237,9 +246,9 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
     <section className="orchestration-panel">
       <header className="orchestration-header">
         <div>
-          <span className="eyebrow">Multi-Agent workflow</span>
-          <h1>Orchestration playground</h1>
-          <p>Run a root Agent, inspect delegation, and watch authorization decisions arrive in order.</p>
+          <span className="eyebrow">{projectName ? `${projectName} · shared project` : "Multi-Agent workflow"}</span>
+          <h1>{projectName ? "Project orchestration" : "Orchestration playground"}</h1>
+          <p>{projectName ? "Run participating Agents inside this shared workspace. Only project members and selected Agents are available." : "Run a root Agent, inspect delegation, and watch authorization decisions arrive in order."}</p>
         </div>
         {job && <span className={"orchestration-status status-" + job.status}>{statusLabel(job.status)}</span>}
       </header>
@@ -250,8 +259,9 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
         <label>
           Root Agent
           <select value={agentId} onChange={(event) => setAgentId(event.target.value)} disabled={busy || availableAgents.length === 0}>
+            <option value="">Choose a root Agent</option>
             {availableAgents.map((agent) => (
-              <option key={agent.id} value={agent.id}>{agent.name} · {agent.agentKey}</option>
+              <option key={agent.id} value={agent.id}>{agent.name} · {agent.agentKey}{agent.ownerLabel ? ` · ${agent.ownerLabel}` : ""}</option>
             ))}
           </select>
           {selectedAgent && (
@@ -262,7 +272,7 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
         </label>
         <label>
           Request
-          <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={4} maxLength={50_000} disabled={busy || Boolean(job && activeStatuses.has(job.status))} />
+          <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={4} maxLength={50_000} placeholder="Describe what you want the participating Agents to do…" disabled={busy || Boolean(job && activeStatuses.has(job.status))} />
         </label>
         <div className="orchestration-actions">
           <button className="button button-primary" disabled={busy || !agentId || !prompt.trim() || Boolean(job && activeStatuses.has(job.status))}>
@@ -272,7 +282,7 @@ export function OrchestrationPanel({ agents }: OrchestrationPanelProps) {
             <button type="button" className="button button-danger" onClick={() => void cancel()} disabled={busy}>Cancel job</button>
           )}
           {job && !activeStatuses.has(job.status) && (
-            <button type="button" className="button button-ghost" onClick={() => { setJob(null); setRuns([]); setMessages([]); setError(null); }}>New job</button>
+            <button type="button" className="button button-ghost" onClick={() => { setJob(null); setRuns([]); setMessages([]); setError(null); setAgentId(""); setPrompt(""); }}>New job</button>
           )}
         </div>
       </form>

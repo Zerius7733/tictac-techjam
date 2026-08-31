@@ -72,6 +72,7 @@ export interface OrchestrationJob {
   id: string;
   requestId: string;
   userId: string | null;
+  projectId: string | null;
   inputText: string;
   inputJson: JsonObject;
   status: OrchestrationJobStatus;
@@ -120,6 +121,7 @@ export interface OrchestrationMessage {
 export interface CreateRootJobInput {
   requestId: string;
   userId: string | null;
+  projectId?: string | null;
   inputText: string;
   inputJson?: JsonObject;
   agentId: string;

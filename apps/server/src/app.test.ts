@@ -82,13 +82,12 @@ describe("HTTP boundary", () => {
     expect(bobLogin.statusCode).toBe(200);
     const bobToken = bobLogin.json().sessionToken as string;
 
-    const bobCreate = await app.inject({
-      method: "POST",
+    const bobAgents = await app.inject({
+      method: "GET",
       url: "/api/agents",
       headers: { authorization: "Bearer " + bobToken },
-      payload: { name: "Should be denied" },
     });
-    expect(bobCreate.statusCode).toBe(403);
+    expect(bobAgents.statusCode).toBe(200);
 
     const logout = await app.inject({
       method: "POST",

@@ -21,6 +21,8 @@ export interface SqliteAgentDirectoryRecord {
   id: string;
   agentKey: string;
   name: string;
+  ownerUserId: string | null;
+  principalId: string | null;
   workspacePath: string;
   status: AgentStatus;
 }
@@ -61,19 +63,19 @@ export class SqliteAgentStore implements AgentStore {
   getAgentById(agentId: string): SqliteAgentDirectoryRecord | null {
     const row = this.db()
       .prepare(
-        "SELECT id, agent_key, name, workspace_path, status FROM agents WHERE id = ?",
+        "SELECT id, agent_key, name, owner_user_id, workspace_path, status FROM agents WHERE id = ?",
       )
       .get(agentId) as SqlRow | undefined;
-    return row ? toDirectoryRecord(row) : null;
+    return row ? toDirectoryRecord(this.withPrincipal(row)) : null;
   }
 
   getAgentByKey(agentKey: string): SqliteAgentDirectoryRecord | null {
     const row = this.db()
       .prepare(
-        "SELECT id, agent_key, name, workspace_path, status FROM agents WHERE agent_key = ? COLLATE NOCASE",
+        "SELECT id, agent_key, name, owner_user_id, workspace_path, status FROM agents WHERE agent_key = ? COLLATE NOCASE",
       )
       .get(agentKey) as SqlRow | undefined;
-    return row ? toDirectoryRecord(row) : null;
+    return row ? toDirectoryRecord(this.withPrincipal(row)) : null;
   }
 
   async mutate<T>(mutation: (database: Database) => T | Promise<T>): Promise<T> {
@@ -92,6 +94,14 @@ export class SqliteAgentStore implements AgentStore {
   private db(): DatabaseSync {
     if (!this.database) throw new Error("SQLite Agent store is not initialized");
     return this.database;
+  }
+
+  private withPrincipal(row: SqlRow): SqlRow {
+    if (!tableExists(this.db(), "agent_principals")) return row;
+    const principal = this.db()
+      .prepare("SELECT id FROM agent_principals WHERE agent_id = ?")
+      .get(String(row.id)) as { id?: string } | undefined;
+    return { ...row, principal_id: principal?.id ?? null };
   }
 }
 
@@ -366,6 +376,8 @@ function toDirectoryRecord(row: SqlRow): SqliteAgentDirectoryRecord {
     id: String(row.id),
     agentKey: String(row.agent_key),
     name: String(row.name),
+    ownerUserId: row.owner_user_id === null ? null : String(row.owner_user_id),
+    principalId: row.principal_id === null ? null : String(row.principal_id),
     workspacePath: String(row.workspace_path),
     status: row.status as AgentStatus,
   };
