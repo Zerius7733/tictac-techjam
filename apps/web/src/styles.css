@@ -186,7 +186,7 @@ button {
 .button-policy {
   color: #4f3db2;
   background: #eeeaff;
-  border: 1px solid #d9d1fb;
+  /*border: 1px solid #d9d1fb;*/
 }
 
 .button-policy:hover:not(:disabled) {
