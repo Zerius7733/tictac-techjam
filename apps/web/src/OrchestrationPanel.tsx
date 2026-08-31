@@ -69,6 +69,45 @@ function runSummary(run: OrchestrationRun): string {
   return summary ?? fallbackSummary(run.outputText ?? "", "Agent completed the run.");
 }
 
+function errorTitle(error: string): string {
+  const value = error.toLocaleLowerCase();
+  if (value.includes("valid json") || value.includes("invalid agent command")) {
+    return "The Agent returned an invalid response format.";
+  }
+  if (value.includes("timeout")) return "The Agent took too long to finish.";
+  if (value.includes("authorization") || value.includes("permission")) {
+    return "Access was blocked by the project or security policy.";
+  }
+  if (value.includes("agent is not registered") || value.includes("not found")) {
+    return "The requested Agent was not available.";
+  }
+  if (value.includes("runtime") || value.includes("connection") || value.includes("service unavailable")) {
+    return "The Agent runtime stopped before it could finish.";
+  }
+  return "The Agent could not complete this step.";
+}
+
+function errorGuidance(error: string, recoveryAttempted = false): string {
+  const value = error.toLocaleLowerCase();
+  if (value.includes("authorization") || value.includes("permission")) {
+    return "No automatic retry was made. Check the project membership, Agent assignment, or protected-resource capability, then start a new job.";
+  }
+  if (value.includes("timeout")) {
+    return "No automatic retry was made because the Agent was already asked to stop. Try a smaller task or increase the configured time limit.";
+  }
+  if (
+    value.includes("valid json") ||
+    value.includes("invalid agent command") ||
+    value.includes("runtime") ||
+    value.includes("connection")
+  ) {
+    return recoveryAttempted
+      ? "The system made one automatic repair attempt. The original issue is shown below; update the Agent instructions or runtime before starting another job."
+      : "No automatic repair attempt is recorded for this run. This was an older or pre-recovery run; start a new job to use the automatic repair flow.";
+  }
+  return "The run stopped safely. Review the detail below, fix the Agent setup, and start a new job.";
+}
+
 function messageSummary(message: OrchestrationMessage): string {
   const summary = payloadString(message.payload, "summary");
   if (summary) return summary;
@@ -99,6 +138,65 @@ function rawMessageOutput(message: OrchestrationMessage): string {
   return payload && Object.keys(payload).length > 0
     ? JSON.stringify(payload, null, 2)
     : message.content;
+}
+
+function elapsedLabel(run: OrchestrationRun, now: number): string {
+  const startedAt = Date.parse(run.startedAt ?? run.createdAt);
+  const endedAt = run.completedAt ? Date.parse(run.completedAt) : now;
+  const seconds = Math.max(0, Math.floor((endedAt - startedAt) / 1_000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}m ${seconds % 60}s`;
+}
+
+function activityProgress(status: OrchestrationRun["status"]): number {
+  if (status === "queued") return 15;
+  if (status === "running") return 55;
+  if (status === "waiting") return 75;
+  return 100;
+}
+
+function runActivity(
+  run: OrchestrationRun,
+  message: OrchestrationMessage | undefined,
+  names: Map<string, string>,
+): string {
+  if (run.status === "queued") return "Queued and waiting to start.";
+  if (run.status === "completed") return "Completed the assigned work.";
+  if (run.status === "failed") return "Stopped safely after an error.";
+  if (run.status === "cancelled") return "Cancelled by the user.";
+
+  const targetKey = message
+    ? payloadString(message.payload, "targetAgentKey") ??
+      payloadString(message.payload, "sourceAgentKey")
+    : null;
+  const targetName = targetKey ? names.get(targetKey) ?? targetKey : "a delegated Agent";
+  if (run.status === "waiting") {
+    if (message?.messageType === "delegation") {
+      return `Waiting for ${targetName} to complete delegated work.`;
+    }
+    if (message?.messageType === "tool_call") {
+      const resource = payloadString(message.payload, "resourceKey");
+      return `Waiting for authorization to access ${resource ?? "a protected resource"}.`;
+    }
+    return "Waiting for delegated work or an authorization decision.";
+  }
+
+  if (message?.messageType === "delegation") {
+    return `Delegating work to ${targetName}.`;
+  }
+  if (message?.messageType === "tool_call") {
+    const action = payloadString(message.payload, "action") ?? "read";
+    const resource = payloadString(message.payload, "resourceKey") ?? "a protected resource";
+    return `Requesting permission to ${action} ${resource}.`;
+  }
+  if (message?.messageType === "tool_result") {
+    return "Reviewing the latest delegated result or authorization decision.";
+  }
+  if (message?.messageType === "progress") {
+    return fallbackSummary(message.content, "Working on the assigned task.");
+  }
+  return "Working on the assigned task.";
 }
 
 interface ExpandableOutputProps {
@@ -138,6 +236,7 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
     if (!availableAgents.some((agent) => agent.id === agentId)) {
@@ -173,6 +272,13 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
       window.clearInterval(timer);
     };
   }, [job?.id, job?.status]);
+
+  const hasActiveRuns = runs.some((run) => activeStatuses.has(run.status));
+  useEffect(() => {
+    if (!hasActiveRuns) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [hasActiveRuns]);
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -232,6 +338,29 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
       ),
     [agents],
   );
+  const latestMessageByRun = useMemo(() => {
+    const latest = new Map<string, OrchestrationMessage>();
+    for (const message of messages) {
+      if (!message.runId) continue;
+      const previous = latest.get(message.runId);
+      if (!previous || message.sequenceNo > previous.sequenceNo) {
+        latest.set(message.runId, message);
+      }
+    }
+    return latest;
+  }, [messages]);
+  const recoveryAttemptByRun = useMemo(() => {
+    const recovery = new Set<string>();
+    for (const message of messages) {
+      if (
+        message.runId &&
+        payloadString(message.payload, "event") === "run_recovery_attempt"
+      ) {
+        recovery.add(message.runId);
+      }
+    }
+    return recovery;
+  }, [messages]);
   const selectedAgent = availableAgents.find((agent) => agent.id === agentId);
   const toggleExpanded = (id: string) => {
     setExpandedIds((current) => {
@@ -248,7 +377,7 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
         <div>
           <span className="eyebrow">{projectName ? `${projectName} · shared project` : "Multi-Agent workflow"}</span>
           <h1>{projectName ? "Project orchestration" : "Orchestration playground"}</h1>
-          <p>{projectName ? "Run participating Agents inside this shared workspace. Only project members and selected Agents are available." : "Run a root Agent, inspect delegation, and watch authorization decisions arrive in order."}</p>
+          <p>{projectName ? "The root Agent receives the request first, coordinates the work, and delegates only to the participating Agents in this shared workspace. The gateway enforces project access and authorization." : "The root Agent receives your request first and coordinates delegation; the orchestration gateway enforces Agent access and authorization."}</p>
         </div>
         {job && <span className={"orchestration-status status-" + job.status}>{statusLabel(job.status)}</span>}
       </header>
@@ -266,7 +395,7 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
           </select>
           {selectedAgent && (
             <small className="orchestration-field-hint">
-              Delegation key: <code>{selectedAgent.agentKey}</code>
+              The root Agent is the coordinator for this run. It is not a separate hidden Agent. Delegation key: <code>{selectedAgent.agentKey}</code>
             </small>
           )}
         </label>
@@ -294,6 +423,51 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
             <div><span>Request</span><code>{job.requestId}</code></div>
             <div><span>Runs</span><strong>{runs.length}</strong></div>
           </div>
+          {job.status === "failed" && (
+            <div className="orchestration-failure-card" role="alert">
+              <span className="eyebrow">Needs attention</span>
+              <strong>{errorTitle(job.errorText ?? "")}</strong>
+              <p>{job.errorText ?? "The orchestration stopped before it could complete."}</p>
+              <small>{errorGuidance(job.errorText ?? "", recoveryAttemptByRun.size > 0)}</small>
+            </div>
+          )}
+          {activeStatuses.has(job.status) && runs.length > 0 && (
+            <section className="orchestration-live-card" aria-live="polite">
+              <div className="orchestration-live-heading">
+                <div>
+                  <span className="eyebrow">Live activity</span>
+                  <h2>What the Agents are doing</h2>
+                </div>
+                <span className="orchestration-live-indicator"><i /> Updating live</span>
+              </div>
+              <div className="orchestration-live-grid">
+                {runs.map((run) => {
+                  const latest = latestMessageByRun.get(run.id);
+                  const agentName = names.get(run.agentId) ?? run.agentId;
+                  return (
+                    <article className="orchestration-live-agent" key={run.id}>
+                      <div className="orchestration-live-agent-heading">
+                        <span className="orchestration-live-icon">{agentName.slice(0, 1).toUpperCase()}</span>
+                        <div>
+                          <strong>{agentName}</strong>
+                          <small>{run.parentRunId ? "Delegated child" : "Root run"} · {elapsedLabel(run, now)}</small>
+                        </div>
+                        <span className={"run-state state-" + run.status}>{statusLabel(run.status)}</span>
+                      </div>
+                      <p>{runActivity(run, latest, names)}</p>
+                      <div className="orchestration-live-track" aria-label={`Activity stage ${statusLabel(run.status)}`}>
+                        <span style={{ width: `${activityProgress(run.status)}%` }} />
+                      </div>
+                      <small className="orchestration-live-detail">
+                        {latest ? `Latest event: ${latest.messageType.replaceAll("_", " ")}` : "No event yet — the Agent is starting up."}
+                      </small>
+                    </article>
+                  );
+                })}
+              </div>
+              <p className="orchestration-live-help">Delegations, protected-resource checks, and results will appear in the timeline below as they happen.</p>
+            </section>
+          )}
           <div className="orchestration-columns">
             <section>
               <div className="orchestration-section-title"><span className="eyebrow">Run tree</span><strong>{runs.length} run{runs.length === 1 ? "" : "s"}</strong></div>
@@ -301,8 +475,15 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
                 {runs.map((run) => (
                   <article className="orchestration-run" key={run.id}>
                     <div><strong>{names.get(run.agentId) ?? run.agentId}</strong><span className={"run-state state-" + run.status}>{statusLabel(run.status)}</span></div>
-                    <small>{run.parentRunId ? "Delegated child" : "Root run"} · {run.id.slice(0, 8)}</small>
-                    {run.errorText && <p className="orchestration-error">{run.errorText}</p>}
+                    <small>{run.parentRunId ? "Delegated child" : "Root run"} · Attempt {run.attempt}{run.errorText && !recoveryAttemptByRun.has(run.id) ? " · no retry recorded" : ""} · {run.id.slice(0, 8)}</small>
+                    {run.errorText && (
+                      <div className="orchestration-error-detail">
+                        <span className="eyebrow">What went wrong</span>
+                        <strong>{errorTitle(run.errorText)}</strong>
+                        <p>{errorGuidance(run.errorText, recoveryAttemptByRun.has(run.id))}</p>
+                        <code>{run.errorText}</code>
+                      </div>
+                    )}
                     {run.outputText && (
                       <ExpandableOutput
                         summary={runSummary(run)}
@@ -321,7 +502,14 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
                 {messages.map((message) => (
                   <article className={"orchestration-event event-" + message.messageType} key={message.id}>
                     <div><strong>{messageTitle(message, names)}</strong><span>{message.messageType.replaceAll("_", " ")} · {formatTime(message.createdAt)}</span></div>
-                    {expandableMessageTypes.has(message.messageType) ? (
+                    {message.messageType === "error" ? (
+                      <div className="orchestration-error-detail">
+                        <span className="eyebrow">What went wrong</span>
+                        <strong>{errorTitle(message.content)}</strong>
+                        <p>{errorGuidance(message.content, Boolean(message.runId && recoveryAttemptByRun.has(message.runId)))}</p>
+                        <code>{message.content}</code>
+                      </div>
+                    ) : expandableMessageTypes.has(message.messageType) ? (
                       <ExpandableOutput
                         summary={messageSummary(message)}
                         raw={rawMessageOutput(message)}

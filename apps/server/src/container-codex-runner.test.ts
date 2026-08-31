@@ -62,4 +62,28 @@ describe("Container Codex runner", () => {
     expect(args.slice(-3)).toEqual(["resume", "thread-123", "continue"]);
     expect(args).not.toContain("keep-id");
   });
+
+  it("mounts the collaborative output schema into the Runtime", () => {
+    const config = loadConfig({
+      NODE_ENV: "test",
+      CODEX_HOME: "/tmp/codex-home",
+      RUNTIME_PROVIDER: "container",
+    });
+    const args = buildContainerRunArgs(
+      {
+        agentId: "agent",
+        workspacePath: "/tmp/workspace",
+        prompt: "continue",
+        threadId: null,
+        outputSchemaPath: "/tmp/orchestration-output.schema.json",
+      },
+      config,
+    );
+
+    expect(args).toContain(
+      "type=bind,src=/tmp/orchestration-output.schema.json,dst=/orchestration-output.schema.json,readonly",
+    );
+    expect(args).toContain("--output-schema");
+    expect(args).toContain("/orchestration-output.schema.json");
+  });
 });

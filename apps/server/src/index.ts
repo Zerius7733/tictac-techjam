@@ -17,9 +17,13 @@ import { importLegacyAgentData, SqliteAgentStore } from "./sqlite-agent-store.js
 import { JsonStore } from "./store.js";
 import { WorkspaceManager } from "./workspace.js";
 import { ProjectStore } from "./projects.js";
+import { writeCollaborativeOutputSchema } from "./orchestration-output-schema.js";
 
 const config = loadConfig();
 await writeCodexConfig(config);
+const collaborativeOutputSchemaPath = await writeCollaborativeOutputSchema(
+  config.dataDirectory,
+);
 
 const authStore = new AuthStore(config.authDatabasePath);
 await authStore.initialize(config.nodeEnv !== "production");
@@ -52,6 +56,7 @@ const dispatcher = new OrchestrationDispatcher(
   {
     resourceProvider: new AllowlistedResourceProvider(policyGateway),
     projectAccess: projectStore,
+    collaborativeOutputSchemaPath,
   },
 );
 const app = await createApp(

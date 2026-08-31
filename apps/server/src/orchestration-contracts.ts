@@ -184,6 +184,11 @@ export interface ResumeRunInput {
   runId: string;
 }
 
+export interface RetryRunInput {
+  runId: string;
+  prompt: string;
+}
+
 export interface CompleteRunInput {
   runId: string;
   outputText: string;
@@ -240,6 +245,7 @@ export interface OrchestrationRepository {
   startRun(input: StartRunInput): Promise<OrchestrationRun>;
   waitRun(input: WaitRunInput): Promise<OrchestrationRun>;
   resumeRun(input: ResumeRunInput): Promise<OrchestrationRun>;
+  retryRun(input: RetryRunInput): Promise<OrchestrationRun>;
   completeRun(input: CompleteRunInput): Promise<OrchestrationRun>;
   failRun(input: FailRunInput): Promise<OrchestrationRun>;
   cancelRun(input: CancelRunInput): Promise<OrchestrationRun>;

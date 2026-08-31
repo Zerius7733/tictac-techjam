@@ -183,6 +183,10 @@ npm run dev
 - Web UI: <http://localhost:5173>
 - API: <http://localhost:3000>
 
+When running `npm run dev`, opening <http://localhost:3000> also redirects to
+the development Web UI. Port 3000 remains the API/control plane, while port
+5173 serves the Vite development page directly.
+
 Use local paths in `.env` when running outside Docker:
 
 ```dotenv

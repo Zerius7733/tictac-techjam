@@ -23,6 +23,7 @@ import type {
   StartRunInput,
   ResumeRunInput,
   RestartReconciliationResult,
+  RetryRunInput,
   WaitRunInput,
   LinkAuditAgentContextInput,
 } from "./orchestration-contracts.js";
@@ -267,6 +268,18 @@ export class InMemoryOrchestrationRepository implements OrchestrationRepository 
     const run = this.requireRun(input.runId);
     if (run.status !== "waiting") throw new Error("Run is not waiting");
     run.status = "running";
+    return structuredClone(run);
+  }
+
+  async retryRun(input: RetryRunInput) {
+    const run = this.requireRun(input.runId);
+    if (run.status !== "running") throw new Error("Run is not running");
+    run.attempt += 1;
+    run.prompt = input.prompt;
+    run.outputText = null;
+    run.outputJson = null;
+    run.errorText = null;
+    run.completedAt = null;
     return structuredClone(run);
   }
 

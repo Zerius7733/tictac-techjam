@@ -51,6 +51,9 @@ export function buildCodexArgs(
     "-C",
     workspacePath,
   ];
+  if (request.outputSchemaPath) {
+    args.push("--output-schema", request.outputSchemaPath);
+  }
   if (request.threadId) {
     args.push("resume", request.threadId, formatRunnerPrompt(request));
   } else {

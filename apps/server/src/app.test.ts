@@ -23,6 +23,16 @@ const service = {
 } as unknown as AgentService;
 
 describe("HTTP boundary", () => {
+  it("redirects the development server root to the Vite web app", async () => {
+    const app = await createApp(loadConfig({ NODE_ENV: "development" }), service);
+
+    const response = await app.inject({ method: "GET", url: "/" });
+
+    expect(response.statusCode).toBe(302);
+    expect(response.headers.location).toBe("http://localhost:5173/");
+    await app.close();
+  });
+
   it("protects API routes with the configured shared token", async () => {
     const app = await createApp(
       loadConfig({ NODE_ENV: "test", APP_AUTH_TOKEN: "a-strong-test-token" }),

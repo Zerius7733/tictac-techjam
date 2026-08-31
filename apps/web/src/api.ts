@@ -193,6 +193,10 @@ export const api = {
     }),
   project: (id: string) =>
     request<{ project: ProjectDetails }>("/api/projects/" + id),
+  openProjectWorkspace: (id: string) =>
+    request<{ ok: boolean; projectId: string }>("/api/projects/" + id + "/open", {
+      method: "POST",
+    }),
   listProjectInvitations: () =>
     request<{ invitations: ProjectInvitation[] }>("/api/project-invitations"),
   acceptProjectInvitation: (invitationId: string) =>
@@ -230,6 +234,11 @@ export const api = {
   removeProjectMember: (projectId: string, userId: string) =>
     request<{ project: ProjectDetails }>(
       "/api/projects/" + projectId + "/members/" + userId,
+      { method: "DELETE" },
+    ),
+  leaveProject: (projectId: string) =>
+    request<{ ok: boolean; projectId: string }>(
+      "/api/projects/" + projectId + "/membership",
       { method: "DELETE" },
     ),
   addProjectAgent: (projectId: string, agentId: string) =>

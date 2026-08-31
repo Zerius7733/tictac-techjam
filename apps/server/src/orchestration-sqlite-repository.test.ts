@@ -157,6 +157,32 @@ describe("SqliteOrchestrationRepository", () => {
     repository.close();
   });
 
+  it("increments a running run attempt when preparing a repair turn", async () => {
+    const { repository } = await makeRepository();
+    const root = await repository.createRootJob({
+      requestId: "request-retry",
+      userId: null,
+      inputText: "Repair the response",
+      agentId: "agent-alice",
+      prompt: "Repair the response",
+    });
+    await repository.startRun({ runId: root.run.id });
+
+    const retried = await repository.retryRun({
+      runId: root.run.id,
+      prompt: "Return the same result as valid JSON.",
+    });
+    expect(retried).toMatchObject({
+      status: "running",
+      attempt: 2,
+      prompt: "Return the same result as valid JSON.",
+      outputText: null,
+      errorText: null,
+      completedAt: null,
+    });
+    repository.close();
+  });
+
   it("links authorization audits to Agent and run evidence idempotently", async () => {
     const { repository, databasePath } = await makeRepository();
     const auditDatabase = new DatabaseSync(databasePath);

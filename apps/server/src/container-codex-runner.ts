@@ -41,6 +41,9 @@ export function buildContainerRunArgs(
 ): string[] {
   const name = containerName(request.agentId, config.runtimeInstanceId);
   const engineName = config.containerEngine.split(/[\\/]/).at(-1)?.toLowerCase();
+  const containerRequest = request.outputSchemaPath
+    ? { ...request, outputSchemaPath: "/orchestration-output.schema.json" }
+    : request;
   return [
     "run",
     "--rm",
@@ -80,11 +83,19 @@ export function buildContainerRunArgs(
     "type=bind,src=" + request.workspacePath + ",dst=/workspace",
     "--mount",
     "type=bind,src=" + config.codexHome + ",dst=/codex-home",
+    ...(request.outputSchemaPath
+      ? [
+          "--mount",
+          "type=bind,src=" +
+            request.outputSchemaPath +
+            ",dst=/orchestration-output.schema.json,readonly",
+        ]
+      : []),
     "--workdir",
     "/workspace",
     config.containerRuntimeImage,
     "codex",
-    ...buildCodexArgs(request, config.codexSandboxMode, "/workspace"),
+    ...buildCodexArgs(containerRequest, config.codexSandboxMode, "/workspace"),
   ];
 }
 

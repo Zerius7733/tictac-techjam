@@ -132,12 +132,12 @@ describe("ProjectStore", () => {
       expect(projectStore.canUseAgent(project.id, bob!.user.id, agentId)).toBe(true);
       expect(projectStore.canUseAgent(project.id, "not-a-member", agentId)).toBe(false);
 
-      const afterBobLeaves = projectStore.removeMember(
-        project.id,
-        alice!.user.id,
-        bob!.user.id,
+      expect(() => projectStore.leaveProject(project.id, alice!.user.id)).toThrow(
+        "Project owner must delete or transfer the project before leaving",
       );
-      expect(afterBobLeaves.agents).toHaveLength(0);
+      projectStore.leaveProject(project.id, bob!.user.id);
+      expect(projectStore.getProject(project.id, alice!.user.id).agents).toHaveLength(0);
+      expect(() => projectStore.getProject(project.id, bob!.user.id)).toThrow("Project not found");
     } finally {
       projectStore.close();
       agentStore.close();

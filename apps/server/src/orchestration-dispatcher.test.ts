@@ -147,6 +147,58 @@ describe("OrchestrationDispatcher", () => {
     ]);
   });
 
+  it("enforces the collaborative response schema for project runs", async () => {
+    const repository = new InMemoryOrchestrationRepository();
+    const runner = new ScriptedAgentRunner([
+      {
+        output:
+          '{"type":"final","summary":"Finished the project task.","content":"Done."}',
+        threadId: "alice-project-thread",
+        usage: null,
+      },
+    ]);
+    const dispatcher = new OrchestrationDispatcher(
+      repository,
+      new TestAgentDirectory([alice, bob]),
+      new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-project",
+      })),
+      runner,
+      {
+        collaborativeOutputSchemaPath: "/tmp/orchestration-output.schema.json",
+        projectAccess: {
+          canUseAgent: () => true,
+          listAgents: () => [alice, bob],
+          workspacePath: () => "/workspace/project",
+        },
+      },
+    );
+    const root = await repository.createRootJob({
+      requestId: "request-project",
+      userId: context.userId,
+      projectId: "project-1",
+      inputText: "Finish the project task",
+      agentId: alice.id,
+      prompt: "Finish the project task",
+    });
+
+    await expect(
+      dispatcher.dispatchRoot({
+        jobId: root.job.id,
+        rootRunId: root.run.id,
+        authContext: context,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(runner.requests[0]?.outputSchemaPath).toBe(
+      "/tmp/orchestration-output.schema.json",
+    );
+    expect(runner.requests[0]?.prompt).toContain(
+      "The runtime enforces this response template",
+    );
+  });
+
   it("records an authorization denial and never creates or runs Bob", async () => {
     const repository = new InMemoryOrchestrationRepository();
     const runner = new ScriptedAgentRunner([
@@ -274,7 +326,57 @@ describe("OrchestrationDispatcher", () => {
     )).toBe(false);
   });
 
-  it("fails closed on invalid Agent output and does not dispatch children", async () => {
+  it("repairs one invalid Agent response before completing the run", async () => {
+    const repository = new InMemoryOrchestrationRepository();
+    const runner = new ScriptedAgentRunner([
+      { output: "not json", threadId: "alice-thread", usage: null },
+      {
+        output: '{"type":"final","summary":"Recovered safely.","content":"The task was completed after a format repair."}',
+        threadId: "alice-repair-thread",
+        usage: null,
+      },
+    ]);
+    const dispatcher = new OrchestrationDispatcher(
+      repository,
+      new TestAgentDirectory([alice, bob]),
+      new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-1",
+      })),
+      runner,
+    );
+    const root = await repository.createRootJob({
+      requestId: "request-invalid",
+      userId: context.userId,
+      inputText: "Invalid",
+      agentId: alice.id,
+      prompt: "Invalid",
+    });
+
+    await expect(dispatcher.dispatchRoot({
+      jobId: root.job.id,
+      rootRunId: root.run.id,
+      authContext: context,
+    })).resolves.toMatchObject({
+      status: "completed",
+      outputText: "The task was completed after a format repair.",
+    });
+    expect(repository.listRuns(root.job.id)).toHaveLength(1);
+    expect(repository.getRun(root.run.id)).toMatchObject({ status: "completed", attempt: 2 });
+    expect(runner.requests).toHaveLength(2);
+    expect(runner.requests[1]?.prompt).toContain("could not be accepted");
+    expect(repository.listMessages(root.job.id).map((message) => message.messageType)).toEqual([
+      "prompt",
+      "progress",
+      "result",
+    ]);
+    expect(repository.listMessages(root.job.id)[1]?.content).toContain(
+      "invalid response",
+    );
+  });
+
+  it("keeps structured final content in raw output while rendering readable text", async () => {
     const repository = new InMemoryOrchestrationRepository();
     const dispatcher = new OrchestrationDispatcher(
       repository,
@@ -285,27 +387,38 @@ describe("OrchestrationDispatcher", () => {
         auditLogId: "audit-1",
       })),
       new ScriptedAgentRunner([
-        { output: "not json", threadId: "alice-thread", usage: null },
+        {
+          output:
+            '{"type":"final","summary":"Returned the approved contract.","content":{"orders":{"order_id":"string","total_amount":"decimal"}}}',
+          threadId: "alice-structured-thread",
+          usage: null,
+        },
       ]),
     );
     const root = await repository.createRootJob({
-      requestId: "request-invalid",
+      requestId: "request-structured-final",
       userId: context.userId,
-      inputText: "Invalid",
+      inputText: "Return the contract",
       agentId: alice.id,
-      prompt: "Invalid",
+      prompt: "Return the contract",
     });
 
-    await dispatcher.dispatchRoot({
-      jobId: root.job.id,
-      rootRunId: root.run.id,
-      authContext: context,
+    await expect(
+      dispatcher.dispatchRoot({
+        jobId: root.job.id,
+        rootRunId: root.run.id,
+        authContext: context,
+      }),
+    ).resolves.toMatchObject({
+      status: "completed",
+      outputText: '{\n  "orders": {\n    "order_id": "string",\n    "total_amount": "decimal"\n  }\n}',
     });
-    expect(repository.listRuns(root.job.id)).toHaveLength(1);
-    expect(repository.getRun(root.run.id)).toMatchObject({ status: "failed" });
+    expect(repository.getRun(root.run.id)?.outputJson).toMatchObject({
+      content: { orders: { order_id: "string" } },
+    });
   });
 
-  it("turns a runner failure into terminal root and job state", async () => {
+  it("keeps the final protocol error after the bounded repair attempt is exhausted", async () => {
     const repository = new InMemoryOrchestrationRepository();
     const dispatcher = new OrchestrationDispatcher(
       repository,
@@ -315,7 +428,10 @@ describe("OrchestrationDispatcher", () => {
         reasonCode: "permission_granted",
         auditLogId: "audit-1",
       })),
-      new ScriptedAgentRunner([new Error("runtime unavailable")]),
+      new ScriptedAgentRunner([
+        { output: "not json", threadId: "alice-thread-1", usage: null },
+        { output: "still not json", threadId: "alice-thread-2", usage: null },
+      ]),
     );
     const root = await repository.createRootJob({
       requestId: "request-runner-failure",
@@ -334,8 +450,47 @@ describe("OrchestrationDispatcher", () => {
     ).resolves.toMatchObject({ status: "failed" });
     expect(repository.getRun(root.run.id)).toMatchObject({
       status: "failed",
-      errorText: "runtime unavailable",
+      errorText: "Agent output must be valid JSON",
     });
+    expect(repository.getRun(root.run.id)?.attempt).toBe(2);
+    expect(repository.listMessages(root.job.id).map((message) => message.messageType)).toEqual([
+      "prompt",
+      "progress",
+      "error",
+    ]);
+  });
+
+  it("repairs a transient runtime failure once", async () => {
+    const repository = new InMemoryOrchestrationRepository();
+    const dispatcher = new OrchestrationDispatcher(
+      repository,
+      new TestAgentDirectory([alice, bob]),
+      new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-1",
+      })),
+      new ScriptedAgentRunner([
+        new Error("runtime unavailable"),
+        { output: '{"type":"final","content":"Recovered."}', threadId: "thread-2", usage: null },
+      ]),
+    );
+    const root = await repository.createRootJob({
+      requestId: "request-runner-recovery",
+      userId: context.userId,
+      inputText: "Recover",
+      agentId: alice.id,
+      prompt: "Recover",
+    });
+
+    await expect(
+      dispatcher.dispatchRoot({
+        jobId: root.job.id,
+        rootRunId: root.run.id,
+        authContext: context,
+      }),
+    ).resolves.toMatchObject({ status: "completed", outputText: "Recovered." });
+    expect(repository.getRun(root.run.id)).toMatchObject({ status: "completed", attempt: 2 });
   });
 
   it("rejects unknown, self-targeted, stopped, and busy targets without child runs", async () => {

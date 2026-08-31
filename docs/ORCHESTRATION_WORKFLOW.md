@@ -191,6 +191,11 @@ Agent output is a discriminated union with three allowed command types:
 
 ### Final command
 
+The `content` field may be plain text or a JSON object/array for structured
+artifacts such as API contracts. Structured content is preserved in
+`output_json` and rendered as readable text in `output_text`, so a contract
+does not fail validation just because it is not a sentence.
+
 For `final`, the dispatcher atomically:
 
 1. updates the run to `completed`;
@@ -382,12 +387,28 @@ an Agent cannot override it by asking again in prose.
 
 ### Runtime or protocol failure
 
-- Runner exceptions, invalid JSON, invalid commands, and persistence errors
-  fail the current run with a safe error event.
+- Project runs pass a runtime-enforced response schema to Codex. Every
+  participating Agent must return exactly one `final`, `delegate`, or
+  `resource_request` command with the required fields; structured result data
+  belongs under `final.content`. The schema is mounted read-only for container
+  Runtimes, so this contract is not prompt-only.
+- Invalid JSON, invalid commands, and clearly transient runner failures receive
+  one bounded repair turn by default. The dispatcher keeps the same run,
+  increments its attempt, records a recovery event, and asks the Agent to
+  repeat the task using the required protocol. A successful repair completes
+  normally; the recovery event remains visible in the timeline.
+- If the repair also fails, or if the failure is a persistence error, the
+  current run is marked failed with the exact safe diagnostic. The UI explains
+  what happened, what was retried, and what the user should fix next.
 - The Agent is released from `busy` so it cannot remain permanently locked.
 - The job is marked failed when the root cannot reach a terminal success state.
 - Error messages and audit metadata must not contain bearer tokens, API keys,
   passwords, or protected record contents.
+
+Authorization denials, missing Agents, delegation cycles, timeouts, and user
+cancellations are not automatically retried. They require a policy, project,
+assignment, or task change; retrying them would repeat the same unsafe or
+unproductive request.
 
 ### Timeouts and diagnostics
 

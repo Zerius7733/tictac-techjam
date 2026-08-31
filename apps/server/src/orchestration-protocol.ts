@@ -2,6 +2,19 @@ import { z } from "zod";
 
 const boundedText = (max: number) => z.string().trim().min(1).max(max);
 
+const finalContent = z
+  .union([
+    boundedText(50_000),
+    z.record(z.string(), z.unknown()),
+    z.array(z.unknown()),
+  ])
+  .refine(
+    (value) =>
+      (typeof value === "string" ? value : JSON.stringify(value)).length <=
+      50_000,
+    "Final response content must be at most 50000 characters",
+  );
+
 const agentKey = boundedText(80).regex(
   /^[A-Za-z0-9][A-Za-z0-9._-]*$/,
   "Agent key must contain only letters, numbers, dots, underscores, and hyphens",
@@ -11,7 +24,10 @@ export const finalAgentCommandSchema = z
   .object({
     type: z.literal("final"),
     summary: boundedText(280).optional(),
-    content: boundedText(50_000),
+    // Agents often return structured contracts here. Keep that structure for
+    // the raw JSON view; the dispatcher renders it as readable text for the
+    // run result.
+    content: finalContent,
   })
   .strict();
 

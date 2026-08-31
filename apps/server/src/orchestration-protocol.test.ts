@@ -18,6 +18,23 @@ describe("structured Agent orchestration protocol", () => {
     });
   });
 
+  it("accepts structured final content for contract responses", () => {
+    expect(
+      parseAgentCommand(
+        '{"type":"final","summary":"Returned the approved contract.","content":{"orders":{"order_id":"string","total_amount":"decimal"}}}',
+      ),
+    ).toEqual({
+      type: "final",
+      summary: "Returned the approved contract.",
+      content: {
+        orders: {
+          order_id: "string",
+          total_amount: "decimal",
+        },
+      },
+    });
+  });
+
   it("parses delegation and resource requests", () => {
     expect(
       parseAgentCommand(

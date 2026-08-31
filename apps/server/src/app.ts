@@ -26,6 +26,7 @@ import type {
   OrchestrationDispatcher,
 } from "./orchestration-dispatcher.js";
 import { ProjectStore, type ProjectRole } from "./projects.js";
+import { openFileLocation } from "./workspace-opener.js";
 
 const agentIdParams = z.object({ id: z.string().uuid() });
 const runIdParams = z.object({ id: z.string().uuid() });
@@ -339,6 +340,12 @@ export async function createApp(
       ],
   });
 
+  if (config.nodeEnv === "development") {
+    app.get("/", async (_request, reply) => {
+      return reply.redirect("http://localhost:5173/");
+    });
+  }
+
   app.decorateRequest("auth", null);
   app.decorateRequest("agentAuth", null);
   app.addHook("onRequest", async (request, reply) => {
@@ -503,6 +510,26 @@ export async function createApp(
     return { project: projectStore.getProject(id, request.auth.userId, isAdmin(request)) };
   });
 
+  app.post("/api/projects/:id/open", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id } = projectIdParams.parse(request.params);
+    if (!projectStore.canViewProject(id, request.auth.userId, isAdmin(request))) {
+      return reply.code(404).send({ error: "Project not found" });
+    }
+    const project = projectStore.getProject(id, request.auth.userId, isAdmin(request));
+    try {
+      await openFileLocation(project.workspacePath);
+      return { ok: true, projectId: id };
+    } catch {
+      return reply.code(503).send({
+        error: "The project folder could not be opened from this runtime",
+        reasonCode: "workspace_open_unavailable",
+      });
+    }
+  });
+
   app.get("/api/projects/:id/collaborator-candidates", async (request, reply) => {
     if (!projectStore || !authStore || !request.auth) {
       return reply.code(503).send({ error: "Project collaboration is not configured" });
@@ -562,6 +589,15 @@ export async function createApp(
     return {
       project: projectStore.removeMember(id, request.auth.userId, userId),
     };
+  });
+
+  app.delete("/api/projects/:id/membership", async (request, reply) => {
+    if (!projectStore || !authStore || !request.auth) {
+      return reply.code(503).send({ error: "Project collaboration is not configured" });
+    }
+    const { id } = projectIdParams.parse(request.params);
+    projectStore.leaveProject(id, request.auth.userId);
+    return { ok: true, projectId: id };
   });
 
   app.post("/api/projects/:id/agents", async (request, reply) => {

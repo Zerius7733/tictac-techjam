@@ -19,6 +19,7 @@ import type {
   OrchestrationRun,
   ResumeRunInput,
   RestartReconciliationResult,
+  RetryRunInput,
   StartRunInput,
   WaitRunInput,
 } from "./orchestration-contracts.js";
@@ -273,6 +274,23 @@ export class SqliteOrchestrationRepository implements OrchestrationRepository {
         )
         .run(run.id);
       if (result.changes !== 1) throw new Error("Run could not be resumed");
+      return this.requireRun(run.id);
+    });
+  }
+
+  async retryRun(input: RetryRunInput): Promise<OrchestrationRun> {
+    return this.transaction(() => {
+      const run = this.requireRun(input.runId);
+      if (run.status !== "running") throw new Error("Run is not running");
+      const result = this.db()
+        .prepare(
+          `UPDATE agent_runs
+           SET attempt = attempt + 1, prompt = ?, output_text = NULL,
+               output_json = NULL, error_text = NULL, completed_at = NULL
+           WHERE id = ? AND status = 'running'`,
+        )
+        .run(input.prompt, run.id);
+      if (result.changes !== 1) throw new Error("Run could not be retried");
       return this.requireRun(run.id);
     });
   }

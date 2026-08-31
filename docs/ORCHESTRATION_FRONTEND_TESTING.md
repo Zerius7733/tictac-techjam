@@ -71,7 +71,9 @@ npm run dev
 ```
 
 Open <http://localhost:5173>. The Vite development server proxies `/api`
-requests to the API on port 3000.
+requests to the API on port 3000. Opening <http://localhost:3000> during this
+workflow redirects to the same Web UI; port 3000 remains the API/control
+plane.
 
 The default shared database is:
 
@@ -520,8 +522,14 @@ Use this format:
 {"type":"final","content":"<sanitized order schema>"}
 ```
 
+Structured schemas are also valid final content. For example, an Agent may
+return `"content":{"orders":{"order_id":"string"}}`; the run card shows
+that contract as readable text while **View raw JSON** keeps the object shape.
+
 The model must return the JSON protocol object. Ordinary prose can result in
-`invalid_agent_protocol` and is not evidence that the UI polling is broken.
+`invalid_agent_protocol`; the dispatcher makes one bounded repair attempt for
+that failure before marking the run failed. This is not evidence that the UI
+polling is broken.
 
 ## 5. Retrieve Bob's server-owned Agent key
 
@@ -578,6 +586,19 @@ Root run:  queued -> running -> completed
 
 The panel should show a Job ID, Request ID, one root run, and timeline events
 including the prompt and final result.
+
+When a recoverable Agent response is malformed, the panel shows a recovery
+event such as “Recovery attempt 2 of 2” and asks the same Agent to return a
+valid orchestration command. If that repair fails, the run card and the
+timeline show a plain-language explanation, the exact safe diagnostic, and the
+next action. Authorization denials and timeouts are explained without an
+automatic retry.
+
+For project runs, the Codex Runtime is also given a fixed response schema. A
+successful run should therefore produce one of the three command shapes every
+time: `final`, `delegate`, or `resource_request`. The repair event is a fallback
+for an older Runtime image or a temporary execution failure, not the normal
+formatting path.
 
 ## 8. Run a successful delegation test
 
@@ -708,7 +729,7 @@ integration.
 | --- | --- | --- |
 | Root Agent list is empty | No non-archived Agent is visible to the signed-in user | Create an Agent or sign in as its owner |
 | `Agent is not ready` | Agent is stopped, busy, or errored | Return it to **ready** before starting the job |
-| `invalid_agent_protocol` | Runtime returned prose or malformed JSON | Add the exact-JSON instruction to Agent settings |
+| `invalid_agent_protocol` | Runtime returned prose or malformed JSON | The dispatcher repairs once automatically; if it persists, add the exact-JSON instruction to Agent settings |
 | `agent_not_found` | Wrong or guessed `targetAgentKey` | Query `agents.agent_key` from SQLite |
 | `authorization_denied` | Missing or revoked invocation/capability grant | Check Security & Policy and the authorization integration |
 | Runtime configuration banner | Ark key/model or Codex Runtime unavailable | Fix `.env`, Docker/Colima/Podman, or host Codex setup |

@@ -37,6 +37,23 @@ describe("Codex runner protocol", () => {
     expect(args.slice(-3)).toEqual(["resume", "thread-123", "add tests"]);
   });
 
+  it("passes a runtime output schema when one is requested", () => {
+    const args = buildCodexArgs(
+      {
+        agentId: "agent",
+        workspacePath: "/tmp/workspace",
+        prompt: "return the collaboration command",
+        threadId: null,
+        outputSchemaPath: "/tmp/orchestration-output.schema.json",
+      },
+      "workspace-write",
+    );
+
+    expect(args).toContain("--output-schema");
+    expect(args).toContain("/tmp/orchestration-output.schema.json");
+    expect(args.slice(-1)).toEqual(["return the collaboration command"]);
+  });
+
   it("includes authenticated human context without credentials", () => {
     const prompt = formatRunnerPrompt({
       agentId: "agent",

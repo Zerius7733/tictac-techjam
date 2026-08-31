@@ -126,6 +126,8 @@ export interface ResumeWaitingRunInput {
 export interface OrchestrationDispatcherOptions {
   maxDepth?: number;
   maxRuns?: number;
+  /** Number of bounded repair turns for recoverable Agent failures. */
+  maxRecoveryAttempts?: number;
   /** Maximum wall-clock time for one Agent turn; null disables this limit. */
   runTimeoutMs?: number | null;
   /** Maximum wall-clock time for the whole job; null disables this limit. */
@@ -134,6 +136,8 @@ export interface OrchestrationDispatcherOptions {
   resourceProvider?: ResourceProvider;
   /** Optional project boundary for cross-account Agent participation. */
   projectAccess?: OrchestrationProjectAccess;
+  /** Host path to the schema enforced for collaborative project turns. */
+  collaborativeOutputSchemaPath?: string | null;
   logger?: OrchestrationLogger;
 }
 
@@ -151,10 +155,12 @@ type ExecutionOutcome = {
 export class OrchestrationDispatcher {
   private readonly maxDepth: number;
   private readonly maxRuns: number;
+  private readonly maxRecoveryAttempts: number;
   private readonly runTimeoutMs: number | null;
   private readonly jobTimeoutMs: number | null;
   private readonly resourceProvider: ResourceProvider | null;
   private readonly projectAccess: OrchestrationProjectAccess | null;
+  private readonly collaborativeOutputSchemaPath: string | null;
   private readonly logger: OrchestrationLogger;
   private readonly activeJobs = new Map<string, Map<string, string>>();
 
@@ -167,10 +173,13 @@ export class OrchestrationDispatcher {
   ) {
     this.maxDepth = options.maxDepth ?? 8;
     this.maxRuns = options.maxRuns ?? 32;
+    this.maxRecoveryAttempts = recoveryAttemptsOption(options.maxRecoveryAttempts);
     this.runTimeoutMs = timeoutOption(options.runTimeoutMs, 600_000);
     this.jobTimeoutMs = timeoutOption(options.jobTimeoutMs, 1_800_000);
     this.resourceProvider = options.resourceProvider ?? null;
     this.projectAccess = options.projectAccess ?? null;
+    this.collaborativeOutputSchemaPath =
+      options.collaborativeOutputSchemaPath ?? null;
     this.logger = options.logger ?? noopLogger;
   }
 
@@ -386,7 +395,15 @@ export class OrchestrationDispatcher {
         jobDeadlineAt,
       );
     } catch (error) {
-      return this.failRun(run, errorMessage(error));
+      return this.recoverOrFail(
+        run,
+        agent,
+        error,
+        authContext,
+        depth,
+        ancestry,
+        jobDeadlineAt,
+      );
     }
   }
 
@@ -403,20 +420,28 @@ export class OrchestrationDispatcher {
     try {
       command = parseAgentCommand(result.output);
     } catch (error) {
-      const reason = error instanceof AgentProtocolError ? error.message : errorMessage(error);
-      return this.failRun(run, reason);
+      return this.recoverOrFail(
+        run,
+        agent,
+        error,
+        authContext,
+        depth,
+        ancestry,
+        jobDeadlineAt,
+      );
     }
 
     if (command.type === "final") {
       try {
+        const outputText = finalContentText(command.content);
         const completed = await this.repository.completeRun({
           runId: run.id,
-          outputText: command.content,
+          outputText,
           outputJson: command,
           codexThreadId: result.threadId ?? run.codexThreadId,
           usage: addUsage(run.usage, result.usage),
         });
-        return { ok: true, content: command.content, run: completed };
+        return { ok: true, content: outputText, run: completed };
       } catch (error) {
         return this.failRun(run, errorMessage(error));
       }
@@ -684,8 +709,101 @@ export class OrchestrationDispatcher {
         jobDeadlineAt,
       );
     } catch (error) {
-      return this.failRun(resumed, errorMessage(error));
+      return this.recoverOrFail(
+        resumed,
+        agent,
+        error,
+        authContext,
+        depth,
+        ancestry,
+        jobDeadlineAt,
+      );
     }
+  }
+
+  private async recoverOrFail(
+    run: OrchestrationRun,
+    agent: OrchestrationAgentDescriptor,
+    error: unknown,
+    authContext: AuthContext,
+    depth: number,
+    ancestry: Set<string>,
+    jobDeadlineAt: number | null,
+  ): Promise<ExecutionOutcome> {
+    const reason = redactDiagnostic(errorMessage(error));
+    const job = this.repository.getJob(run.jobId);
+    const canRetry =
+      this.isRecoverableFailure(error) &&
+      run.attempt <= this.maxRecoveryAttempts &&
+      job?.status !== "cancelled";
+
+    if (!canRetry) return this.failRun(run, reason);
+
+    const nextAttempt = run.attempt + 1;
+    const repairPrompt = recoveryPrompt(run.prompt, reason);
+    let retried: OrchestrationRun;
+    try {
+      retried = await this.repository.retryRun({
+        runId: run.id,
+        prompt: repairPrompt,
+      });
+      await this.repository.appendMessage({
+        jobId: run.jobId,
+        runId: run.id,
+        role: "system",
+        senderKind: "system",
+        messageType: "progress",
+        content: `Recovery attempt ${nextAttempt} of ${this.maxRecoveryAttempts + 1}: ${recoverySummary(reason)}`,
+        payload: {
+          event: "run_recovery_attempt",
+          attempt: nextAttempt,
+          maxAttempts: this.maxRecoveryAttempts + 1,
+          errorCode: error instanceof AgentProtocolError ? error.code : "agent_runtime_error",
+          error: reason,
+        },
+      });
+    } catch {
+      return this.failRun(run, reason);
+    }
+
+    try {
+      const result = await this.runAgentTurn(
+        agent,
+        retried,
+        retried.prompt,
+        retried.codexThreadId,
+        authContext,
+        jobDeadlineAt,
+      );
+      return this.processResult(
+        retried,
+        agent,
+        result,
+        authContext,
+        depth,
+        ancestry,
+        jobDeadlineAt,
+      );
+    } catch (retryError) {
+      return this.recoverOrFail(
+        retried,
+        agent,
+        retryError,
+        authContext,
+        depth,
+        ancestry,
+        jobDeadlineAt,
+      );
+    }
+  }
+
+  private isRecoverableFailure(error: unknown): boolean {
+    if (error instanceof AgentProtocolError) return true;
+    if (error instanceof OrchestrationTimeoutError) return false;
+    const message = errorMessage(error);
+    return /(?:temporar(?:y|ily)|transient|runtime unavailable|service unavailable|connection reset|econnreset|econnrefused|epipe|socket)/i.test(
+      message,
+    );
   }
 
   private async runAgentTurn(
@@ -696,6 +814,7 @@ export class OrchestrationDispatcher {
     authContext: AuthContext,
     jobDeadlineAt: number | null,
   ): Promise<RunnerResult> {
+    const isCollaborative = Boolean(this.repository.getJob(run.jobId)?.projectId);
     this.registerActive(run.jobId, run.id, agent.id);
     this.logger.info(
       logFields(authContext, run.jobId, run.id, agent.id),
@@ -709,8 +828,12 @@ export class OrchestrationDispatcher {
           prompt: structuredPrompt(
             prompt,
             this.availableAgentsForRun(run, authContext, agent.id),
+            isCollaborative,
           ),
           threadId,
+          ...(isCollaborative && this.collaborativeOutputSchemaPath
+            ? { outputSchemaPath: this.collaborativeOutputSchemaPath }
+            : {}),
           requestId: authContext.requestId,
           jobId: run.jobId,
           runId: run.id,
@@ -861,6 +984,14 @@ function timeoutOption(value: number | null | undefined, fallback: number): numb
   return value;
 }
 
+function recoveryAttemptsOption(value: number | undefined): number {
+  const attempts = value ?? 1;
+  if (!Number.isInteger(attempts) || attempts < 0 || attempts > 3) {
+    throw new Error("Recovery attempts must be an integer between 0 and 3");
+  }
+  return attempts;
+}
+
 function redactDiagnostic(value: string): string {
   return value
     .replace(
@@ -882,6 +1013,7 @@ function sanitizeResourceContent(value: string): string {
 function structuredPrompt(
   prompt: string,
   availableAgents: OrchestrationAgentDescriptor[] = [],
+  collaborative = false,
 ): string {
   const roster = availableAgents.length
     ? [
@@ -901,10 +1033,44 @@ function structuredPrompt(
     'To request protected data use {"type":"resource_request","targetAgentKey":"...","action":"read","resourceType":"data_asset","resourceKey":"...","purpose":"..."}.',
     "Treat authorization denial messages as final policy; never retry a denied request with different wording.",
     "The summary is shown on the run card. Keep it human-readable, concise, and free of JSON or code; keep the complete result in content.",
+    ...(collaborative
+      ? [
+          "This is a shared project run. The runtime enforces this response template; return exactly one object with type final, delegate, or resource_request and the fields described above.",
+          "Put structured result data under final.content. Never return a bare result object, markdown, or explanatory prose outside the command object.",
+        ]
+      : []),
     ...roster,
     "Task or orchestration result:",
     prompt,
   ].join("\n");
+}
+
+function recoveryPrompt(originalPrompt: string, reason: string): string {
+  return [
+    "Your previous turn could not be accepted by the orchestration gateway.",
+    `Validation detail: ${reason}`,
+    "Repair the response and perform the same task again.",
+    "Return exactly one valid JSON object and no markdown, prose, or code fences.",
+    'For a final response use {"type":"final","summary":"Short plain-language summary of what you did.","content":"Full result, including any structured data."}.',
+    'For delegation use {"type":"delegate","targetAgentKey":"...","task":"..."}.',
+    'For protected data use {"type":"resource_request","targetAgentKey":"...","action":"read","resourceType":"data_asset","resourceKey":"...","purpose":"..."}.',
+    "Original task:",
+    originalPrompt,
+  ].join("\n");
+}
+
+function recoverySummary(reason: string): string {
+  if (reason.toLocaleLowerCase().includes("valid json")) {
+    return "The Agent returned an invalid response, so it is being asked to reply in the required JSON format.";
+  }
+  return "The Agent encountered a temporary execution problem, so it is being asked to try this step again.";
+}
+
+function finalContentText(content: unknown): string {
+  if (typeof content === "string") return content;
+  const serialized = JSON.stringify(content, null, 2);
+  if (!serialized) throw new Error("Final response content could not be serialized");
+  return serialized;
 }
 
 function safeResourceReason(error: unknown): string {

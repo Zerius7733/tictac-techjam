@@ -404,6 +404,36 @@ export class ProjectStore {
     return this.getProject(projectId, actorUserId);
   }
 
+  leaveProject(projectId: string, actorUserId: string): void {
+    const member = this.memberFor(projectId, actorUserId);
+    if (!member) throw new HttpError(404, "Project member not found");
+    if (member.role === "owner") {
+      throw new HttpError(409, "Project owner must delete or transfer the project before leaving");
+    }
+    this.db().exec("BEGIN IMMEDIATE");
+    try {
+      this.db()
+        .prepare(
+          `DELETE FROM project_agents
+           WHERE project_id = ?
+             AND agent_id IN (SELECT id FROM agents WHERE owner_user_id = ?)`,
+        )
+        .run(projectId, actorUserId);
+      this.db()
+        .prepare("DELETE FROM project_members WHERE project_id = ? AND user_id = ?")
+        .run(projectId, actorUserId);
+      this.db().exec("COMMIT");
+    } catch (error) {
+      try {
+        this.db().exec("ROLLBACK");
+      } catch {
+        // Preserve the original error.
+      }
+      throw error;
+    }
+    this.touch(projectId);
+  }
+
   async deleteProject(projectId: string, actorUserId: string): Promise<void> {
     const project = this.db()
       .prepare("SELECT * FROM projects WHERE id = ?")

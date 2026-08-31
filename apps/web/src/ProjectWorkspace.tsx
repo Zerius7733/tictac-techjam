@@ -200,6 +200,17 @@ export function ProjectWorkspace({
     }, `@${username} no longer has access to this project.`);
   };
 
+  const leaveProject = async () => {
+    if (!project || project.currentRole === "owner") return;
+    if (!window.confirm(`Leave “${project.name}”? You will lose access to its workspace and participating Agents.`)) return;
+    const leavingProjectName = project.name;
+    await runAction(async () => {
+      await api.leaveProject(project.id);
+      setProject(null);
+      await refreshProjects();
+    }, `You left ${leavingProjectName}.`);
+  };
+
   const revokeInvitation = async (invitation: ProjectInvitation) => {
     if (!project || !window.confirm(`Cancel the invitation for ${invitation.displayName ?? invitation.username}?`)) return;
     await runAction(async () => {
@@ -218,6 +229,13 @@ export function ProjectWorkspace({
       setProject(null);
       await refreshProjects();
     }, `Project ${deletedProjectName} deleted.`);
+  };
+
+  const openWorkspace = async () => {
+    if (!project) return;
+    await runAction(async () => {
+      await api.openProjectWorkspace(project.id);
+    }, "Project folder opened in your file manager.");
   };
 
   const selectMemberCandidate = (candidate: ProjectUserCandidate) => {
@@ -330,14 +348,26 @@ export function ProjectWorkspace({
                 </div>
                 <div className="project-overview-actions">
                   <span className="project-state">Local workspace ready</span>
-                  {project.currentRole === "owner" && (
+                  {project.currentRole === "owner" ? (
                     <button className="button button-danger button-small" onClick={() => void deleteProject()} disabled={busy}>Delete project</button>
+                  ) : (
+                    <button className="button button-danger button-small" onClick={() => void leaveProject()} disabled={busy}>Leave project</button>
                   )}
                 </div>
               </div>
               <div className="project-repo-strip">
                 <span><b>Shared repository</b> Collaborators can use selected Agents here.</span>
-                <code>{project.workspacePath}</code>
+                <button
+                  type="button"
+                  className="project-repo-location"
+                  onClick={() => void openWorkspace()}
+                  disabled={busy}
+                  title="Open this project folder"
+                  aria-label={`Open project folder ${project.workspacePath}`}
+                >
+                  <code>{project.workspacePath}</code>
+                  <span>Open folder ↗</span>
+                </button>
               </div>
             </section>
 
@@ -487,7 +517,7 @@ export function ProjectWorkspace({
                     <div>
                       <span className="eyebrow">Project orchestration</span>
                       <h2>Ask the project Agents to collaborate</h2>
-                      <p>Choose any participating Agent as the root. Delegation is restricted to the other Agents listed above.</p>
+                      <p>The root Agent receives your request first, coordinates the task, and can delegate to the other participating Agents. The gateway enforces project membership and protected-resource authorization.</p>
                     </div>
                   </div>
                   {!canEdit && <div className="project-empty">Viewer access is read-only. Ask a project editor to run the task.</div>}

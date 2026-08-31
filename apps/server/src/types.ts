@@ -94,6 +94,8 @@ export interface RunnerRequest {
   workspacePath: string;
   prompt: string;
   threadId: string | null;
+  /** Optional JSON Schema enforced by the Codex runtime for this turn. */
+  outputSchemaPath?: string;
   /** Optional orchestration correlation IDs for runtime logs and safeguards. */
   requestId?: string;
   jobId?: string;
