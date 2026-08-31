@@ -581,15 +581,16 @@ invocation.
 For the root Alice Agent:
 
 1. Open **Security & Policy**.
-2. Click **Issue Agent credential**.
-3. In **Choose the smallest access**, select:
+2. In **Choose the smallest access**, select:
 
    ```text
    data_asset · order-schema
    ```
 
-4. Select **Read**.
-5. Click **Grant read access**.
+3. Select **Read**.
+4. Click **Grant read access**.
+5. After the read capability is created, click **Issue Agent credential** if
+   one is not already shown.
 6. Leave `customer-records` ungranted.
 
 Data assets are read-only. The intended negative case is that a request for

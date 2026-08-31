@@ -65,8 +65,9 @@ profiles are enough; each profile keeps its own human session cookie.
 6. In Bob's browser, open **Projects**, review **Pending project invitations**,
    and click **Accept**. Bob is now an accepted collaborator.
 7. While signed in as Bob, select **Bob Backend** and open **Security & Policy**.
-   Issue its Agent credential, then grant read access to **Backend API
-   contract**. Bob's Agent principal now has its own independent permission.
+   First grant read access to **Backend API contract**, then issue its Agent
+   credential. Bob's Agent principal now has its own independent permission;
+   the credential identifies the Agent for runtime/tool-call requests.
 8. While signed in as Bob, return to the project and use **Assign your Agent
    to this project**. Add **Bob Backend**. Alice cannot assign Bob's Agent.
 9. Alice can create a credential and grant **Frontend design system** to Alice
