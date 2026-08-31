@@ -91,6 +91,9 @@ the same Agent context.
 2. Authentication middleware validates the bearer session and creates an
    `AuthContext` containing `requestId`, `userId`, and `roleNames`. The caller
    identity is not accepted from the JSON body.
+   The context request ID remains the HTTP/audit trace identifier. When the
+   API persists an orchestration job, it adds a UUID-backed job request ID so
+   Fastify IDs such as `req-1` cannot collide after a server restart.
 3. The API authorizes orchestration creation and project edit access, then
    resolves the hidden project orchestrator from SQLite. Participating Agent
    delegation and protected-resource access remain independently authorized.
@@ -123,7 +126,7 @@ single SQLite write transaction:
 
 | Record | Important values |
 | --- | --- |
-| `orchestration_jobs` | `status = queued`, caller `user_id`, `request_id`, and original input |
+| `orchestration_jobs` | `status = queued`, caller `user_id`, a UUID-backed job `request_id`, and original input |
 | Orchestrator `agent_runs` row | `status = queued`, `parent_run_id = NULL`, project orchestrator `agent_id`, prompt, and a null/new run thread |
 | `agent_messages` row | `sequence_no = 0`, `message_type = prompt`, caller prompt, and root `run_id` |
 

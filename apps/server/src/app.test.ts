@@ -269,6 +269,65 @@ describe("HTTP boundary", () => {
     await cancelApp.close();
   });
 
+  it("uses unique persisted orchestration request IDs across server restarts", async () => {
+    const repository = new InMemoryOrchestrationRepository();
+    const agent: OrchestrationAgentDescriptor = {
+      id: "22222222-2222-4222-8222-222222222222",
+      agentKey: "restart-safe-agent",
+      workspacePath: "/workspace/restart-safe-agent",
+      status: "ready",
+    };
+    const directory: OrchestrationAgentDirectory = {
+      getAgentById: (id) => (id === agent.id ? agent : null),
+      getAgentByKey: (key) => (key === agent.agentKey ? agent : null),
+    };
+    const authorizer = new RecordingAuthorizer(() => ({
+      allowed: true,
+      reasonCode: "permission_granted",
+      auditLogId: "audit-restart-safe",
+    }));
+    const makeApp = (threadId: string) =>
+      createApp(loadConfig({ NODE_ENV: "test" }), service, undefined, {
+        repository,
+        dispatcher: new OrchestrationDispatcher(
+          repository,
+          directory,
+          authorizer,
+          new ScriptedAgentRunner([
+            { output: '{"type":"final","content":"done"}', threadId, usage: null },
+          ]),
+        ),
+        agents: directory,
+        authorizer,
+      });
+
+    const firstApp = await makeApp("thread-restart-1");
+    const first = await firstApp.inject({
+      method: "POST",
+      url: "/api/orchestrations",
+      payload: { agentId: agent.id, prompt: "First job" },
+    });
+    expect(first.statusCode).toBe(202);
+    const firstBody = first.json() as { job: { id: string; requestId: string } };
+    await expect.poll(() => repository.getJob(firstBody.job.id)?.status).toBe("completed");
+    await firstApp.close();
+
+    // A new Fastify instance starts its request counter at req-1 again. The
+    // persisted orchestration ID must not reuse that short HTTP identifier.
+    const secondApp = await makeApp("thread-restart-2");
+    const second = await secondApp.inject({
+      method: "POST",
+      url: "/api/orchestrations",
+      payload: { agentId: agent.id, prompt: "Second job" },
+    });
+    expect(second.statusCode).toBe(202);
+    const secondBody = second.json() as { job: { id: string; requestId: string } };
+    expect(secondBody.job.requestId).not.toBe(firstBody.job.requestId);
+    expect(secondBody.job.requestId).toMatch(/^orchestration:req-1:/);
+    await expect.poll(() => repository.getJob(secondBody.job.id)?.status).toBe("completed");
+    await secondApp.close();
+  });
+
   it("resolves a project's orchestrator when no root Agent is submitted", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "launchpad-http-project-orchestrator-test-"));
     const databasePath = path.join(root, "auth.db");

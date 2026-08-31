@@ -5,7 +5,7 @@ import Fastify, {
   type FastifyReply,
   type FastifyRequest,
 } from "fastify";
-import { timingSafeEqual } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { AgentPolicyGateway } from "./agent-policy-gateway.js";
@@ -808,10 +808,15 @@ export async function createApp(
       return;
     }
     const context = orchestrationContext(request);
+    // Fastify request IDs are useful for HTTP/audit tracing but are not safe
+    // as a persisted job key: they can repeat after a server restart (for
+    // example, `req-1`). Keep the request context unchanged for authorization
+    // and give every orchestration job its own globally unique correlation ID.
+    const orchestrationRequestId = `orchestration:${context.requestId}:${randomUUID()}`;
     let created: Awaited<ReturnType<OrchestrationRepository["createRootJob"]>>;
     try {
       created = await orchestration.repository.createRootJob({
-        requestId: context.requestId,
+        requestId: orchestrationRequestId,
         userId: authStore ? context.userId : null,
         projectId: body.projectId ?? null,
         inputText: body.prompt,
@@ -838,7 +843,7 @@ export async function createApp(
         );
       });
     return reply.code(202).send({
-      requestId: context.requestId,
+      requestId: orchestrationRequestId,
       job: created.job,
       run: publicRun(created.run),
       message: publicMessage(created.message),

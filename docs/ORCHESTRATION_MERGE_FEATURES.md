@@ -1,6 +1,6 @@
 # Orchestration Merge Feature Preservation
 
-This document tracks the in-progress merge of `orchestration-agent` into
+This document tracks the merge of `orchestration-agent` into
 `orchestration-integration`. It is a preservation checklist: a merge is only
 complete when the capabilities from both branches remain available and the
 combined test suite passes.
@@ -11,7 +11,9 @@ combined test suite passes.
 - **Incoming branch:** `orchestration-agent`
 - **Main:** already present in the current branch history (`3798ab6`); this is
   not a direct `main` merge at the moment.
-- **Merge status:** conflicts resolved and staged; merge is not committed.
+- **Merge status:** conflicts were resolved in merge commit `aa9e45b`.
+- **Follow-up status:** the UUID-backed request-ID fix and regression test are
+  staged but not committed yet.
 - **Previously unresolved files (all resolved):**
   - [x] `apps/server/src/orchestration-dispatcher.ts`
   - [x] `apps/server/src/orchestration-output-schema.test.ts`
@@ -92,6 +94,8 @@ unknown fields must still fail validation.
 - [x] Existing single-Agent, Alice/Bob, project, and frontend flows remain
   covered by tests.
 - [x] No feature is removed merely to make the merge conflict-free.
+- [x] Persisted orchestration request IDs are UUID-backed and cannot collide
+  when Fastify restarts its short `req-*` counter.
 
 ## Validation performed
 
@@ -101,6 +105,9 @@ unknown fields must still fail validation.
 - [x] No conflict markers remain in tracked source, documentation, migration,
   or script files.
 - [x] `git diff --cached --check` reported no whitespace errors.
+- [x] Regression test covers two server instances reusing `req-1` while
+  creating separate orchestration jobs.
 
-The merge is intentionally **not committed**. The staged index is ready for a
-review/commit after the branch owner confirms the combined diff.
+The merge commit is present locally but has not been pushed. The follow-up
+request-ID fix is staged for review/commit after the branch owner confirms the
+combined diff.
