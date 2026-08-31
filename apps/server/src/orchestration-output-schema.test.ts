@@ -23,13 +23,19 @@ describe("collaborative Runtime output schema", () => {
       "resourceType",
       "resourceKey",
       "purpose",
+      "delegations",
     ]);
     expect(properties.type).toEqual({
       type: "string",
-      enum: ["final", "delegate", "resource_request"],
+      enum: ["final", "delegate", "delegate_parallel", "resource_request"],
     });
-    for (const field of required.slice(1)) {
+    for (const field of required.slice(1, -1)) {
       expect(properties[field]).toEqual({ type: ["string", "null"] });
     }
+    expect(properties.delegations).toMatchObject({
+      type: ["array", "null"],
+      minItems: 2,
+      maxItems: 8,
+    });
   });
 });

@@ -83,6 +83,17 @@ export interface RunnerResult {
   usage: RunUsage | null;
 }
 
+export type RunnerProgressStage =
+  | "runtime_started"
+  | "codex_event"
+  | "heartbeat";
+
+export interface RunnerProgress {
+  stage: RunnerProgressStage;
+  /** Safe event metadata only; never include raw model output or stderr. */
+  detail?: string;
+}
+
 export interface HumanIdentity {
   username: string;
   displayName: string | null;
@@ -101,6 +112,8 @@ export interface RunnerRequest {
   jobId?: string;
   runId?: string;
   humanIdentity?: HumanIdentity;
+  /** Internal callback used to surface safe runtime lifecycle events. */
+  onProgress?: (progress: RunnerProgress) => void;
 }
 
 export interface AgentRunner {

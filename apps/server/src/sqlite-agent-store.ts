@@ -136,7 +136,9 @@ function readSnapshot(database: DatabaseSync): Database {
 
   const agents = (
     database
-      .prepare("SELECT * FROM agents ORDER BY updated_at DESC, id ASC")
+      .prepare(
+        "SELECT * FROM agents WHERE agent_type = 'worker' ORDER BY updated_at DESC, id ASC",
+      )
       .all() as unknown as SqlRow[]
   ).map((row) => toAgent(row, principalIds.get(String(row.id)) ?? null));
 
@@ -165,7 +167,7 @@ function writeSnapshot(database: DatabaseSync, next: Database): void {
   database.exec("BEGIN IMMEDIATE");
   try {
     const existingAgents = database
-      .prepare("SELECT id FROM agents")
+      .prepare("SELECT id FROM agents WHERE agent_type = 'worker'")
       .all() as Array<{ id: string }>;
     const nextAgentIds = new Set(next.agents.map((agent) => agent.id));
     for (const existing of existingAgents) {

@@ -11,6 +11,8 @@ Project owner/editor
         |
         +-- participating Agents (Alice Frontend, Bob Backend)
         |
+        +-- dedicated project orchestrator
+        |
         +-- shared project workspace
 ```
 
@@ -69,8 +71,8 @@ profiles are enough; each profile keeps its own human session cookie.
    to this project**. Add **Bob Backend**. Alice cannot assign Bob's Agent.
 9. Alice can create a credential and grant **Frontend design system** to Alice
    Frontend, then assign Alice Frontend from Alice's project view.
-10. In the project workspace, use the **Project orchestration** form. Select
-   Alice Frontend as the root and ask:
+10. In the project workspace, use the **Project orchestration** form. The
+   project's dedicated orchestrator is selected automatically. Ask:
 
    ```text
    Build the order dashboard plan. Use the frontend design system for the UI
@@ -78,8 +80,8 @@ profiles are enough; each profile keeps its own human session cookie.
    request customer records or private secrets.
    ```
 
-11. Watch the run tree and timeline. The root Agent can delegate only to
-    Agents listed in this project. Resource requests are checked against both
+11. Watch the run tree and timeline. The project orchestrator can delegate only
+    to Agents listed in this project. Resource requests are checked against both
     the signed-in human and the target Agent principal. While the job is active,
     the **Live activity** panel shows each Agent's current stage, elapsed time,
     and latest event.
@@ -96,8 +98,7 @@ Use the seeded **Order Dashboard** project with these participating Agents:
 Do not grant either Agent **Customer records**, private notes, or secrets. Those
 resources are included only for denial tests.
 
-From Alice's project workspace, select **Alice Frontend** as the root Agent and
-send:
+From Alice's project workspace, send:
 
 ```text
 Build the Order Dashboard implementation plan. Use the frontend design system
@@ -109,14 +110,13 @@ customer records, private notes, or secrets.
 
 Expected behavior:
 
-1. Alice Frontend appears as a running root run in **Live activity**.
-2. The timeline records a delegation from Alice Frontend to Bob Backend.
+1. **Order Dashboard Orchestrator** appears as the coordinating run in **Live activity**.
+2. The timeline records focused delegations to Alice Frontend and Bob Backend.
 3. Bob Backend appears as a delegated child run and works on the backend task.
 4. The backend contract request is allowed because Bob granted his Agent read
    access to **Backend API contract**.
-5. Alice Frontend resumes, combines Bob's contract with the frontend plan, and
-   finishes with a human-readable summary. Click a result card to inspect the
-   underlying JSON.
+5. The project orchestrator combines both Agents' evidence and finishes with a
+   human-readable summary. Click a result card to inspect the underlying JSON.
 
 For a clear negative case, repeat the task after revoking Bob's contract
 capability. Bob's run should show an authorization-denied event, the request
@@ -135,12 +135,18 @@ without retrying with a different resource.
 | Leave project | A non-owner removes their own membership and participating Agent from the project. The owner must delete or transfer the project instead. |
 | Security & Policy | The Agent owner issues credentials and grants exact resource/action capabilities. |
 
-### Root Agent versus the gateway
+### Project orchestrator versus the gateway
 
-The **Root Agent** is the participating Agent selected to receive the original
-request first. It is the coordinator for that run: it can complete the task,
-request an allowed resource, or delegate a focused piece of work to another
-participating Agent. It is not a separate hidden Agent or a second account.
+Every project owns one hidden **project orchestrator** with a fixed system
+prompt. It receives every project request automatically, plans the work,
+delegates focused tasks to participating Agents, requests protected resources
+through the Agent that owns the required capability, and synthesizes one final
+result. Users no longer choose a root Agent.
+
+Participating Agents receive focused tasks and must answer the orchestrator
+with the fixed collaboration response template. They cannot delegate or issue
+resource requests themselves; when information is missing, they identify the
+exact resource needed so the orchestrator can request it.
 
 The **orchestration gateway** is the server-side coordinator and enforcer. It
 creates the run tree, routes delegated work, checks project membership and

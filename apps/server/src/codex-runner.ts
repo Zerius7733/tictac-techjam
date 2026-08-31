@@ -6,6 +6,7 @@ import { RunCancelledError } from "./errors.js";
 import type {
   AgentRunner,
   RunUsage,
+  RunnerProgress,
   RunnerRequest,
   RunnerResult,
 } from "./types.js";
@@ -62,13 +63,15 @@ export function buildCodexArgs(
   return args;
 }
 
-export function parseCodexEventLine(line: string, parsed: ParsedEvents): void {
+export function parseCodexEventLine(line: string, parsed: ParsedEvents): string | null {
   let event: Record<string, unknown>;
   try {
     event = JSON.parse(line) as Record<string, unknown>;
   } catch {
-    return;
+    return null;
   }
+
+  const eventType = typeof event.type === "string" ? event.type : null;
 
   if (event.type === "thread.started" && typeof event.thread_id === "string") {
     parsed.threadId = event.thread_id;
@@ -104,6 +107,20 @@ export function parseCodexEventLine(line: string, parsed: ParsedEvents): void {
           ? event.error
           : "Codex reported an unknown error";
     parsed.errors.push(message);
+  }
+
+  return eventType;
+}
+
+/** Progress callbacks are diagnostic-only and must never break the runner. */
+export function reportRunnerProgress(
+  request: RunnerRequest,
+  progress: RunnerProgress,
+): void {
+  try {
+    request.onProgress?.(progress);
+  } catch {
+    // Observability must not change Agent execution semantics.
   }
 }
 
@@ -169,6 +186,10 @@ export class CodexRunner implements AgentRunner {
       forceKillTimer: null as NodeJS.Timeout | null,
     };
     this.active.set(request.agentId, active);
+    reportRunnerProgress(request, {
+      stage: "runtime_started",
+      detail: "Codex CLI process started.",
+    });
 
     const parsed: ParsedEvents = {
       messages: [],
@@ -192,7 +213,13 @@ export class CodexRunner implements AgentRunner {
         const lines = stdout.split(/\r?\n/);
         stdout = lines.pop() ?? "";
         for (const line of lines) {
-          parseCodexEventLine(line, parsed);
+          const eventType = parseCodexEventLine(line, parsed);
+          if (eventType) {
+            reportRunnerProgress(request, {
+              stage: "codex_event",
+              detail: eventType,
+            });
+          }
         }
       } else {
         stderr += chunk.toString("utf8");
@@ -217,7 +244,13 @@ export class CodexRunner implements AgentRunner {
         child.once("close", (code) => resolve(code ?? 1));
       });
       if (stdout.trim()) {
-        parseCodexEventLine(stdout.trim(), parsed);
+        const eventType = parseCodexEventLine(stdout.trim(), parsed);
+        if (eventType) {
+          reportRunnerProgress(request, {
+            stage: "codex_event",
+            detail: eventType,
+          });
+        }
       }
       if (active.cancelled) {
         throw new RunCancelledError();

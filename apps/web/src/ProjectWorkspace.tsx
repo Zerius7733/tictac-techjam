@@ -27,12 +27,33 @@ function agentOwnerLabel(ownerUsername: string | null, currentUsername: string):
   return ownerUsername === currentUsername ? "Your Agent" : `@${ownerUsername}'s Agent`;
 }
 
+function readBrowserValue(key: string): string {
+  try {
+    return window.localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function writeBrowserValue(key: string, value: string): void {
+  try {
+    if (value) window.localStorage.setItem(key, value);
+    else window.localStorage.removeItem(key);
+  } catch {
+    // Browser storage can be unavailable in private or restricted contexts.
+  }
+}
+
 export function ProjectWorkspace({
   currentUser,
   onRefreshAgents,
 }: ProjectWorkspaceProps) {
+  const selectionStorageKey = `launchpad.projects.selected.${currentUser.id}`;
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState(() =>
+    readBrowserValue(selectionStorageKey),
+  );
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [project, setProject] = useState<ProjectDetails | null>(null);
   const [projectName, setProjectName] = useState("");
   const [projectDescription, setProjectDescription] = useState("");
@@ -50,11 +71,15 @@ export function ProjectWorkspace({
     const result = await api.listProjects();
     setProjects(result.projects);
     setSelectedProjectId((current) =>
-      current && result.projects.some((item) => item.id === current)
-        ? current
-        : (result.projects[0]?.id ?? ""),
+      (() => {
+        const preferred = current || readBrowserValue(selectionStorageKey);
+        return preferred && result.projects.some((item) => item.id === preferred)
+          ? preferred
+          : (result.projects[0]?.id ?? "");
+      })(),
     );
-  }, []);
+    setProjectsLoaded(true);
+  }, [selectionStorageKey]);
 
   const refreshProject = useCallback(async (projectId: string) => {
     if (!projectId) {
@@ -82,10 +107,15 @@ export function ProjectWorkspace({
   }, [refreshInvitations, refreshProjects]);
 
   useEffect(() => {
+    writeBrowserValue(selectionStorageKey, selectedProjectId);
+  }, [selectedProjectId, selectionStorageKey]);
+
+  useEffect(() => {
+    if (!projectsLoaded) return;
     void refreshProject(selectedProjectId).catch((reason) =>
       setError(reason instanceof Error ? reason.message : String(reason)),
     );
-  }, [refreshProject, selectedProjectId]);
+  }, [projectsLoaded, refreshProject, selectedProjectId]);
 
   useEffect(() => {
     if (!project || !["owner", "editor"].includes(project.currentRole)) {
@@ -504,24 +534,27 @@ export function ProjectWorkspace({
             </div>
 
             <section className="project-task-card">
-              {canEdit && projectAgentOptions.length > 0 && (
+              {canEdit && projectAgentOptions.length > 0 && project.orchestrator && (
                 <OrchestrationPanel
                   agents={projectAgentOptions}
+                  currentUserId={currentUser.id}
                   projectId={project.id}
                   projectName={project.name}
+                  orchestrator={project.orchestrator}
                 />
               )}
-              {(!canEdit || projectAgentOptions.length === 0) && (
+              {(!canEdit || projectAgentOptions.length === 0 || !project.orchestrator) && (
                 <>
                   <div className="project-task-heading">
                     <div>
                       <span className="eyebrow">Project orchestration</span>
                       <h2>Ask the project Agents to collaborate</h2>
-                      <p>The root Agent receives your request first, coordinates the task, and can delegate to the other participating Agents. The gateway enforces project membership and protected-resource authorization.</p>
+                      <p>The project orchestrator receives every request, delegates work to participating Agents, requests authorized resources when needed, and combines their results.</p>
                     </div>
                   </div>
                   {!canEdit && <div className="project-empty">Viewer access is read-only. Ask a project editor to run the task.</div>}
                   {projectAgentOptions.length === 0 && <div className="project-empty">Add at least one participating Agent before running a task.</div>}
+                  {!project.orchestrator && <div className="project-empty">The project orchestrator is unavailable. Restart the current server so it can finish the project upgrade.</div>}
                 </>
               )}
             </section>

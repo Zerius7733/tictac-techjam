@@ -55,6 +55,14 @@ const bob: OrchestrationAgentDescriptor = {
   workspacePath: "/workspace/bob",
   status: "ready",
 };
+const projectOrchestrator = {
+  id: "agent-project-orchestrator",
+  agentKey: "project-orchestrator-project-1",
+  name: "Order Dashboard Orchestrator",
+  workspacePath: "/workspace/project",
+  status: "ready" as const,
+  systemPrompt: "Coordinate the Order Dashboard and synthesize one integrated result.",
+};
 const context = { requestId: "request-1", userId: "user-1", roleNames: ["developer"] };
 
 describe("OrchestrationDispatcher", () => {
@@ -147,19 +155,31 @@ describe("OrchestrationDispatcher", () => {
     ]);
   });
 
-  it("enforces the collaborative response schema for project runs", async () => {
+  it("uses the dedicated project orchestrator and fixed worker response template", async () => {
     const repository = new InMemoryOrchestrationRepository();
     const runner = new ScriptedAgentRunner([
       {
         output:
-          '{"type":"final","summary":"Finished the project task.","content":"Done."}',
-        threadId: "alice-project-thread",
+          '{"type":"delegate","summary":null,"content":null,"targetAgentKey":"bob-order-service","task":"Provide the approved API contract.","action":null,"resourceType":null,"resourceKey":null,"purpose":null}',
+        threadId: "orchestrator-project-thread",
+        usage: null,
+      },
+      {
+        output:
+          '{"type":"final","summary":"Returned the approved API contract.","content":"GET /orders uses the approved non-PII schema.","targetAgentKey":null,"task":null,"action":null,"resourceType":null,"resourceKey":null,"purpose":null}',
+        threadId: "bob-project-thread",
+        usage: null,
+      },
+      {
+        output:
+          '{"type":"final","summary":"Finished the project task.","content":"Use GET /orders with the approved non-PII schema.","targetAgentKey":null,"task":null,"action":null,"resourceType":null,"resourceKey":null,"purpose":null}',
+        threadId: "orchestrator-project-thread-2",
         usage: null,
       },
     ]);
     const dispatcher = new OrchestrationDispatcher(
       repository,
-      new TestAgentDirectory([alice, bob]),
+      new TestAgentDirectory([projectOrchestrator, alice, bob]),
       new RecordingAuthorizer(() => ({
         allowed: true,
         reasonCode: "permission_granted",
@@ -171,6 +191,7 @@ describe("OrchestrationDispatcher", () => {
         projectAccess: {
           canUseAgent: () => true,
           listAgents: () => [alice, bob],
+          getOrchestrator: () => projectOrchestrator,
           workspacePath: () => "/workspace/project",
         },
       },
@@ -180,7 +201,7 @@ describe("OrchestrationDispatcher", () => {
       userId: context.userId,
       projectId: "project-1",
       inputText: "Finish the project task",
-      agentId: alice.id,
+      agentId: projectOrchestrator.id,
       prompt: "Finish the project task",
     });
 
@@ -195,8 +216,106 @@ describe("OrchestrationDispatcher", () => {
       "/tmp/orchestration-output.schema.json",
     );
     expect(runner.requests[0]?.prompt).toContain(
-      "The runtime enforces this response template",
+      "The runtime enforces the collaboration response template",
     );
+    expect(runner.requests[0]?.prompt).toContain(projectOrchestrator.systemPrompt);
+    expect(runner.requests[0]?.prompt).toContain("Bob Order Service (bob-order-service)");
+    expect(runner.requests[1]?.prompt).toContain(
+      "Return only this fixed template",
+    );
+    expect(runner.requests[1]?.prompt).toContain(
+      '"targetAgentKey":null',
+    );
+    expect(runner.requests[1]?.prompt).not.toContain("Available Agents");
+    expect(repository.listRuns(root.job.id)).toHaveLength(2);
+    expect(repository.getJob(root.job.id)).toMatchObject({
+      status: "completed",
+      outputText: "Use GET /orders with the approved non-PII schema.",
+    });
+  });
+
+  it("runs independent delegated Agents concurrently", async () => {
+    const repository = new InMemoryOrchestrationRepository();
+    let activeChildren = 0;
+    let maximumActiveChildren = 0;
+    const runner = new ScriptedAgentRunner([
+      {
+        output:
+          '{"type":"delegate_parallel","summary":null,"content":null,"targetAgentKey":null,"task":null,"action":null,"resourceType":null,"resourceKey":null,"purpose":null,"delegations":[{"targetAgentKey":"alice-frontend","task":"Build the frontend shell without editing backend files."},{"targetAgentKey":"bob-order-service","task":"Define the backend contract without editing frontend files."}]}',
+        threadId: "orchestrator-parallel-thread",
+        usage: null,
+      },
+      async () => {
+        activeChildren += 1;
+        maximumActiveChildren = Math.max(maximumActiveChildren, activeChildren);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        activeChildren -= 1;
+        return {
+          output: '{"type":"final","summary":"Frontend work complete.","content":"Frontend shell ready."}',
+          threadId: "alice-parallel-thread",
+          usage: null,
+        };
+      },
+      async () => {
+        activeChildren += 1;
+        maximumActiveChildren = Math.max(maximumActiveChildren, activeChildren);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        activeChildren -= 1;
+        return {
+          output: '{"type":"final","summary":"Backend work complete.","content":"Backend contract ready."}',
+          threadId: "bob-parallel-thread",
+          usage: null,
+        };
+      },
+      {
+        output:
+          '{"type":"final","summary":"Combined the independent results.","content":"Frontend and backend work are ready to integrate."}',
+        threadId: "orchestrator-parallel-thread-2",
+        usage: null,
+      },
+    ]);
+    const dispatcher = new OrchestrationDispatcher(
+      repository,
+      new TestAgentDirectory([projectOrchestrator, alice, bob]),
+      new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-parallel",
+      })),
+      runner,
+      {
+        projectAccess: {
+          canUseAgent: () => true,
+          listAgents: () => [alice, bob],
+          getOrchestrator: () => projectOrchestrator,
+          workspacePath: () => "/workspace/project",
+        },
+      },
+    );
+    const root = await repository.createRootJob({
+      requestId: "request-parallel",
+      userId: context.userId,
+      projectId: "project-1",
+      inputText: "Prepare the independent frontend and backend pieces",
+      agentId: projectOrchestrator.id,
+      prompt: "Prepare the independent frontend and backend pieces",
+    });
+
+    await expect(
+      dispatcher.dispatchRoot({
+        jobId: root.job.id,
+        rootRunId: root.run.id,
+        authContext: context,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(maximumActiveChildren).toBe(2);
+    expect(repository.listRuns(root.job.id)).toHaveLength(3);
+    expect(repository.listMessages(root.job.id).filter((message) => message.messageType === "delegation")).toHaveLength(2);
+    expect(
+      repository
+        .listMessages(root.job.id)
+        .find((message) => message.messageType === "tool_result")?.content,
+    ).toContain("Frontend shell ready.");
   });
 
   it("records an authorization denial and never creates or runs Bob", async () => {
@@ -630,7 +749,10 @@ describe("OrchestrationDispatcher", () => {
         rootRunId: root.run.id,
         authContext: context,
       }),
-    ).resolves.toMatchObject({ status: "failed", errorText: "run_timeout" });
+    ).resolves.toMatchObject({
+      status: "failed",
+      errorText: "Agent turn timed out after 20 ms (run_timeout)",
+    });
     expect(runner.cancellations).toEqual([alice.id]);
   });
 
@@ -679,5 +801,63 @@ describe("OrchestrationDispatcher", () => {
       "orchestration_agent_turn_finished",
       "orchestration_dispatch_finished",
     ]));
+  });
+
+  it("persists safe runtime progress without storing model output", async () => {
+    const repository = new InMemoryOrchestrationRepository();
+    const runner = new ScriptedAgentRunner([
+      (request) => {
+        request.onProgress?.({
+          stage: "runtime_started",
+          detail: "Codex CLI process started.",
+        });
+        request.onProgress?.({
+          stage: "codex_event",
+          detail: "thread.started",
+        });
+        request.onProgress?.({
+          stage: "codex_event",
+          detail: "an event with model output that must not be stored",
+        });
+        return {
+          output: '{"type":"final","content":"Done"}',
+          threadId: "thread",
+          usage: null,
+        };
+      },
+    ]);
+    const dispatcher = new OrchestrationDispatcher(
+      repository,
+      new TestAgentDirectory([alice, bob]),
+      new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-1",
+      })),
+      runner,
+      { runTimeoutMs: null, jobTimeoutMs: null },
+    );
+    const root = await repository.createRootJob({
+      requestId: "request-runtime-progress",
+      userId: context.userId,
+      inputText: "Report progress",
+      agentId: alice.id,
+      prompt: "Report progress",
+    });
+
+    await dispatcher.dispatchRoot({
+      jobId: root.job.id,
+      rootRunId: root.run.id,
+      authContext: context,
+    });
+
+    const progress = repository
+      .listMessages(root.job.id)
+      .filter((message) => message.payload.event === "runtime_progress");
+    expect(progress.map((message) => message.content)).toEqual([
+      "The Agent runtime started; waiting for the first Codex event.",
+      "The Agent runtime reported Codex event: thread.started.",
+    ]);
+    expect(progress.every((message) => !message.content.includes("model output"))).toBe(true);
   });
 });

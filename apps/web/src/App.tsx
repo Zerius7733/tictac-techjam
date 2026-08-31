@@ -443,6 +443,7 @@ export default function App() {
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [showProjects, setShowProjects] = useState(false);
+  const [projectsVisited, setProjectsVisited] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showSecurity, setShowSecurity] = useState(false);
   const [securitySetup, setSecuritySetup] = useState(false);
@@ -897,6 +898,7 @@ export default function App() {
         <button
           className={"button button-ghost projects-nav-button " + (showProjects ? "active" : "")}
           onClick={() => {
+            setProjectsVisited(true);
             setShowProjects(true);
           }}
           disabled={busy}
@@ -993,12 +995,16 @@ export default function App() {
           </div>
         )}
 
-        {showProjects && currentUser ? (
-          <ProjectWorkspace
-            currentUser={currentUser}
-            onRefreshAgents={refreshAgents}
-          />
-        ) : selected ? (
+        {currentUser && projectsVisited && (
+          <div className={"projects-view " + (showProjects ? "" : "projects-view-hidden")}>
+            <ProjectWorkspace
+              currentUser={currentUser}
+              onRefreshAgents={refreshAgents}
+            />
+          </div>
+        )}
+
+        {!showProjects && (selected ? (
           <>
             <header className="agent-header">
               <div>
@@ -1257,7 +1263,7 @@ export default function App() {
               Create your first Agent
             </button>
           </div>
-        )}
+        ))}
       </main>
 
       {showCreate && (

@@ -4,9 +4,11 @@ This document describes how one authenticated request becomes an auditable
 orchestration job, how Agents delegate work, how authorization gates each
 execution, and how the parent Agent resumes after child work completes.
 
-The workflow is intentionally sequential for the current single-node
-implementation. It uses SQLite as the runtime source of truth and keeps the
-authorization implementation behind the shared `Authorizer` interface.
+The workflow is sequential by default. Project orchestrators can explicitly
+issue a bounded parallel delegation for independent tasks; the dispatcher
+still keeps authorization, run limits, and Agent ownership checks in place.
+It uses SQLite as the runtime source of truth and keeps the authorization
+implementation behind the shared `Authorizer` interface.
 
 Related documents:
 
@@ -44,12 +46,12 @@ flowchart TD
     B --> C{"Authenticated?"}
     C -- "No" --> C1["Return 401; create no runtime work"]
     C -- "Yes" --> D["Build server-owned AuthContext<br/>requestId, userId, roleNames"]
-    D --> E["Authorize orchestration:create<br/>and root Agent invoke"]
+    D --> E["Authorize orchestration:create<br/>and project access"]
     E --> F{"Allowed?"}
     F -- "No" --> F1["Record denial / audit ID<br/>return forbidden or failed job"]
-    F -- "Yes" --> G["Resolve active root Agent<br/>and verify ownership"]
-    G --> H["SQLite transaction:<br/>job queued + root run queued + prompt event"]
-    H --> I["Commit, then dispatch root run"]
+    F -- "Yes" --> G["Resolve the project's dedicated orchestrator"]
+    G --> H["SQLite transaction:<br/>job queued + orchestrator run queued + prompt event"]
+    H --> I["Commit, then dispatch orchestrator run"]
     I --> J["queued -> running; Agent ready -> busy"]
     J --> K["AgentRunner.run({jobId, runId, threadId})"]
     K --> L["Parse and validate JSON command with Zod"]
@@ -72,6 +74,9 @@ flowchart TD
     Y --> K
     K --> Z["Failure or cancellation"]
     Z --> Z1["Persist error / cancellation<br/>release Agent; derive job status"]
+    Q -- "Allowed parallel delegation" --> Q1["Create bounded child batch<br/>for independent targets"]
+    Q1 --> Q2["Run distinct child Agents concurrently"]
+    Q2 --> V
 ```
 
 The parent must enter `waiting` before the dispatcher checks or creates child
@@ -80,17 +85,17 @@ the same Agent context.
 
 ## 3. Request and authorization phase
 
-1. The client sends the user prompt and a server-recognized root Agent ID or
-   `agent_key`.
+1. For a project job, the client sends the user prompt and project ID. The
+   server resolves that project's dedicated orchestrator; the client cannot
+   select or replace it. Non-project orchestration may still send an Agent ID.
 2. Authentication middleware validates the bearer session and creates an
    `AuthContext` containing `requestId`, `userId`, and `roleNames`. The caller
    identity is not accepted from the JSON body.
-3. The API asks the `Authorizer` to authorize the orchestration creation and
-   root Agent invocation. The orchestration layer does not read role or
-   permission tables directly.
-4. The server resolves the Agent from SQLite, verifies that it exists, is
-   active, and is visible to the caller. A display name is not a permission
-   key; authorization uses the stable server-owned `agent_key`.
+3. The API authorizes orchestration creation and project edit access, then
+   resolves the hidden project orchestrator from SQLite. Participating Agent
+   delegation and protected-resource access remain independently authorized.
+4. The server verifies that the orchestrator exists and is ready. Display names
+   are not permission keys; routing uses stable server-owned `agent_key` values.
 5. A denied request stops before `AgentRunner.run()` and returns a stable
    reason code. The returned `auditLogId` and `requestId` are retained for
    later correlation when the audit-context repository is integrated.
@@ -119,7 +124,7 @@ single SQLite write transaction:
 | Record | Important values |
 | --- | --- |
 | `orchestration_jobs` | `status = queued`, caller `user_id`, `request_id`, and original input |
-| Root `agent_runs` row | `status = queued`, `parent_run_id = NULL`, root `agent_id`, prompt, and a null/new run thread |
+| Orchestrator `agent_runs` row | `status = queued`, `parent_run_id = NULL`, project orchestrator `agent_id`, prompt, and a null/new run thread |
 | `agent_messages` row | `sequence_no = 0`, `message_type = prompt`, caller prompt, and root `run_id` |
 
 The transaction is committed before runtime work begins. If any insert fails,
@@ -168,7 +173,7 @@ history.
 
 ## 6. Command handling
 
-Agent output is a discriminated union with three allowed command types:
+Agent output is a discriminated union with four allowed command types:
 
 ```json
 { "type": "final", "content": "..." }
@@ -186,6 +191,16 @@ Agent output is a discriminated union with three allowed command types:
   "resourceType": "data_asset",
   "resourceKey": "order-schema",
   "purpose": "Build the order dashboard"
+}
+```
+
+```json
+{
+  "type": "delegate_parallel",
+  "delegations": [
+    { "targetAgentKey": "alice-frontend", "task": "Build the UI shell." },
+    { "targetAgentKey": "bob-order-service", "task": "Define the API contract." }
+  ]
 }
 ```
 
@@ -225,6 +240,17 @@ If any guard or authorization check denies delegation, no child run is
 created. Instead, the dispatcher appends a `tool_result` containing an
 `authorization_denied` envelope and resumes the parent with its original
 thread.
+
+### Parallel delegation
+
+`delegate_parallel` is an explicit opt-in for two to eight independent tasks.
+The dispatcher validates every target before creating any child, rejects
+duplicate targets, and starts the distinct child runs concurrently. Their
+results are combined into one resume envelope for the project orchestrator.
+The orchestrator is instructed to use this only when tasks do not edit the
+same files and do not depend on each other's output. Dependent work remains a
+normal sequential `delegate` so the first result can be reviewed before the
+next Agent is started.
 
 ### Protected resource request
 
@@ -329,7 +355,7 @@ repository operation is implemented.
 
 ## 10. Alice/Bob example
 
-Assume Alice's Agent has `read:order-schema` but not permission to read
+Assume Bob's Agent has `read:order-schema` but not permission to read
 `customer-records`.
 
 ```mermaid
@@ -337,34 +363,34 @@ sequenceDiagram
     participant UI as Alice's UI
     participant API as Orchestration API
     participant GW as Authorization Gateway
-    participant A as Alice's Agent
+    participant A as Project orchestrator
     participant D as Dispatcher
     participant B as Bob's Agent
     participant DB as SQLite timeline
 
     UI->>API: Build order dashboard
-    API->>GW: authorize(create + invoke Alice)
+    API->>GW: authorize(create + project edit access)
     GW-->>API: ALLOW + auditLogId
-    API->>DB: Create job, Alice root run, prompt
-    API->>D: Dispatch root after commit
-    D->>A: run(root thread)
+    API->>DB: Create job, orchestrator run, prompt
+    API->>D: Dispatch orchestrator after commit
+    D->>A: run(orchestrator thread)
     A-->>D: delegate Bob for approved order schema
-    D->>DB: Alice running -> waiting; append delegation
+    D->>DB: Orchestrator running -> waiting; append delegation
     D->>GW: authorize(invoke Bob / read order-schema)
     GW-->>D: ALLOW
     D->>DB: Create Bob child run
     D->>B: run(Bob child thread)
     B-->>D: Sanitized order schema
     D->>DB: Persist Bob result + tool_result
-    D->>A: resume(Alice root thread)
+    D->>A: resume(orchestrator thread)
     A-->>D: resource_request customer-records
-    D->>DB: Alice running -> waiting; append tool_call
+    D->>DB: Orchestrator running -> waiting; append tool_call
     D->>GW: authorize(read data_asset customer-records)
     GW-->>D: DENY + missing_permission
     D->>DB: Append denial; create no Bob run
-    D->>A: resume(Alice root thread with denial)
+    D->>A: resume(orchestrator thread with denial)
     A-->>D: final sanitized frontend plan
-    D->>DB: Complete Alice run and job
+    D->>DB: Complete orchestrator run and job
     D-->>UI: Pollable completed result
 ```
 
@@ -388,11 +414,11 @@ an Agent cannot override it by asking again in prose.
 ### Runtime or protocol failure
 
 - Project runs pass a runtime-enforced response schema to Codex. Every
-  participating Agent must return exactly one `final`, `delegate`, or
-  `resource_request` command with the required fields; fields that do not apply
-  are represented as `null`, and structured result data belongs under
-  `final.content` as a JSON string. The schema is mounted read-only for
-  container Runtimes, so this contract is not prompt-only.
+  participating Agent must return exactly one `final`, `delegate`,
+  `delegate_parallel`, or `resource_request` command with the required fields;
+  fields that do not apply are represented as `null`, and structured result
+  data belongs under `final.content` as a JSON string. The schema is mounted
+  read-only for container Runtimes, so this contract is not prompt-only.
 - Invalid JSON, invalid commands, and clearly transient runner failures receive
   one bounded repair turn by default. The dispatcher keeps the same run,
   increments its attempt, records a recovery event, and asks the Agent to
@@ -421,8 +447,35 @@ Agent, records `run_timeout` or `job_timeout`, and fails the affected run/job
 safely. Set a timeout option to `null` only for controlled tests.
 
 Structured lifecycle logs carry `requestId`, `userId`, `jobId`, `runId`, and
-`agentId`. Diagnostic messages are bounded and redact common credential
-patterns before being stored or logged.
+`agentId`. Active runs also persist safe runtime diagnostics: runtime startup,
+Codex event names, and a 15-second heartbeat. The live activity card shows the
+latest event and warns when a running Agent has not reported for 45 seconds.
+Diagnostic messages are bounded and redact common credential patterns before
+being stored or logged; raw model output and stderr are never used as progress
+messages.
+
+When a run appears stuck, first confirm that only one control plane is using
+the database and that the browser is connected to its matching Web server:
+
+```bash
+lsof -nP -iTCP:3000 -sTCP:LISTEN
+lsof -nP -iTCP:5173 -sTCP:LISTEN
+```
+
+Stop stale API/Web processes before restarting the POC. For the container
+runtime, inspect the Agent container named in the server log or list the
+runtime containers with:
+
+```bash
+docker ps --all --filter label=io.codejam.launchpad=agent-runtime
+docker logs <container-name>
+```
+
+The request/job/run identifiers in the server log and the UI run tree should
+match. If the container is absent, the stall is before runtime startup; if it
+is present with no Codex events, the stall is inside the runtime or model call;
+if the UI stops receiving heartbeats while the container is gone, the control
+plane needs to be restarted and the job reconciled.
 
 ### Cancellation
 
