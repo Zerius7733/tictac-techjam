@@ -107,6 +107,168 @@ Agent ownership is enforced. The orchestration authorization contributor must
 provide the cross-Agent invocation/delegation rule before this becomes a
 complete Alice/Bob frontend demo.
 
+## 3.1 Two-user frontend flow: Alice talks to Bob
+
+This is the complete browser flow when Alice and Bob are separate human
+accounts. Use two Chrome profiles (or one normal window and one incognito
+window) so each profile has its own login session. Both profiles must point to
+the same running server and therefore the same SQLite database.
+
+### What "talking" means
+
+The two browser windows do not send messages directly to one another. Alice's
+browser starts one orchestration job. The server then:
+
+1. runs Alice's root Agent;
+2. parses Alice's structured delegation command;
+3. authorizes the request using Alice's server-owned context;
+4. runs Bob's Agent in a child run and Bob's workspace;
+5. stores Bob's result as a message in the same orchestration job; and
+6. resumes Alice's parent run so Alice can produce the final response.
+
+Bob's browser can remain open for observation, but it is not required for Bob's
+Agent to execute.
+
+### Profile B: create Bob's Agent
+
+1. Start one server with `npm run poc` or `npm run dev`.
+2. In the second Chrome profile, open the application and sign in as:
+
+   ```text
+   bob / bob-demo-2026
+   ```
+
+3. Create `Bob Order Service` and add the Bob instructions from Section 4.
+4. Confirm the Agent status is **ready**.
+
+The seeded Bob account is a viewer and normally cannot create an Agent. If the
+**Create Agent** action returns `403`, this is expected policy behavior. Have
+an admin/authorization contributor provision Bob's Agent, or temporarily grant
+Bob the required Agent-creation capability in a development database. Do not
+weaken the production policy just to run this test.
+
+### Read Bob's key
+
+From a terminal in the same repository, read the key from the shared database:
+
+```bash
+sqlite3 data/auth.db \
+  "SELECT name, id, agent_key, owner_user_id, status
+   FROM agents
+   WHERE name = 'Bob Order Service';"
+```
+
+Copy the `agent_key` value. The display name and UUID are not interchangeable
+with `agent_key`.
+
+### Profile A: configure Alice's root Agent
+
+1. In the first Chrome profile, sign in as:
+
+   ```text
+   alice / alice-demo-2026
+   ```
+
+2. Create or select `Alice Frontend` and add the Alice instructions from
+   Section 4.
+3. Confirm that Alice's Agent is **ready**.
+4. Open **Security & Policy**, issue an Agent credential if required by the
+   environment, and grant:
+
+   ```text
+   read / data_asset / order-schema
+   ```
+
+5. Leave `customer-records` ungranted.
+
+Alice does not need Bob's Agent to appear in her Root Agent selector. The root
+selector should contain Alice's Agent. The server resolves Bob from the
+server-owned key in Alice's structured command.
+
+### Start the cross-user orchestration
+
+In Alice's **Orchestration playground**, replace `<BOB_AGENT_KEY>` with the
+value read from SQLite and submit:
+
+```text
+Ask the order-service Agent with key <BOB_AGENT_KEY> for the approved,
+sanitized order schema. Do not request customer records. After receiving the
+schema, return a final recommendation for the order dashboard.
+```
+
+Alice's Runtime should produce a command equivalent to:
+
+```json
+{
+  "type": "delegate",
+  "targetAgentKey": "<BOB_AGENT_KEY>",
+  "task": "Provide the sanitized order schema only."
+}
+```
+
+The authorization decision is made for Alice's request. It must allow:
+
+```text
+invoke / agent / <BOB_AGENT_KEY>
+```
+
+If authorization allows the delegation, the server creates Bob's child run.
+Bob's instructions constrain the child response to the sanitized order schema.
+
+### Verify the conversation in Alice's UI
+
+Alice's orchestration panel should show:
+
+```text
+Alice root run: running -> waiting -> running -> completed
+Bob child run:  queued  -> running -> completed
+```
+
+The timeline should contain, in order, events similar to:
+
+```text
+Alice Frontend       prompt
+Authorization gateway delegation
+Bob Order Service    prompt/result
+Authorization gateway tool_result or result
+Alice Frontend       result
+```
+
+The final Alice result should refer only to the approved schema. Bob's browser
+does not need to be refreshed or used to approve the request.
+
+### Verify the denied cross-user resource request
+
+From Alice's orchestration panel, submit a request that asks for Bob's
+protected customer data:
+
+```text
+Ask the order-service Agent with key <BOB_AGENT_KEY> for customer-records.
+If authorization denies this request, do not retry and explain the limitation.
+```
+
+Expected behavior:
+
+- Alice's run enters `waiting` while the request is evaluated.
+- The timeline records an authorization denial/tool result.
+- No raw customer data is returned.
+- No unauthorized provider lookup or Bob child run is created for the denied
+  resource request.
+- Alice resumes and returns a safe explanation.
+
+If Alice receives `agent_not_found`, the key is incorrect or Bob's Agent is not
+visible to the server directory. If she receives `authorization_denied`, the
+cross-Agent invocation or `data_asset` policy is not configured for the Alice
+context. Both are useful integration results and should be recorded rather
+than bypassed in the test.
+
+### Optional Bob observation
+
+In Bob's profile, select `Bob Order Service` and inspect its normal Agent
+history after Alice's job completes. The orchestration child run is primarily
+visible through Alice's job timeline and the shared database; the current Bob
+UI does not provide a live cross-user inbox for delegated jobs.
+
 ## 4. Add Agent instructions
 
 Open each Agent's **Settings** panel and use instructions similar to these.
@@ -340,4 +502,3 @@ integration.
 | `authorization_denied` | Missing or revoked invocation/capability grant | Check Security & Policy and the authorization integration |
 | Runtime configuration banner | Ark key/model or Codex Runtime unavailable | Fix `.env`, Docker/Colima/Podman, or host Codex setup |
 | 401 responses | Session expired or wrong account | Log in again |
-
