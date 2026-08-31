@@ -5,9 +5,10 @@ control plane. It covers the Agent setup, server-owned Agent keys, the shared
 SQLite database, a successful delegation, a denied protected-resource request,
 and cancellation.
 
-All orchestration runs now start inside a selected project. The project
-workspace is the shared boundary for the root Agent, participating Agents,
-and project-scoped permissions. Use the dedicated
+All orchestration runs now start inside a selected project. Each project has a
+dedicated orchestrator with a fixed system prompt; the project workspace is the
+shared boundary for that orchestrator, participating Agents, and project-scoped
+permissions. Use the dedicated
 [project collaboration guide](PROJECT_COLLABORATION.md) for the recommended
 two-browser test.
 
@@ -20,7 +21,7 @@ flowchart TD
     C --> D[Read Bob's agent_key from SQLite]
     D --> E[Configure credentials and data_asset capability]
     E --> F[Open Projects and select a project]
-    F --> G[Start root Alice Frontend run]
+    F --> G[Start the project orchestrator]
     G --> H{Agent command}
     H -->|final| I[Job completes]
     H -->|delegate| J[Authorize and run Bob child]
@@ -159,7 +160,7 @@ Password: alice-demo-2026
 
 Stay signed in as Alice for the entire test. Do not open a second account yet.
 
-### Step 3: use Alice's seeded root Agent
+### Step 3: use Alice's seeded participating Agent
 
 If startup seeding is enabled, select the existing `Alice Frontend` Agent. Its
 description, instructions, principal, and workspace are already provisioned.
@@ -183,7 +184,7 @@ If you intentionally disabled seeding, create the Agent instead:
    ```
 
 4. Click **Create Agent** when using the manual path.
-5. Confirm the selected root Agent appears in the sidebar with status **ready**.
+5. Confirm the participating Agent appears in the sidebar with status **ready**.
 
 ### Step 4: create Bob's worker Agent under the same Alice account
 
@@ -229,7 +230,7 @@ returned by SQLite rather than guessing from the display name.
 
 ### Step 6: put Bob's real key in Alice's instructions
 
-1. Select the Alice root Agent in the sidebar.
+1. Select Alice's participating Agent in the sidebar.
 2. Click **Settings**.
 3. The seeded instructions already tell Alice to use the exact key supplied in
    the orchestration context. If you are using a custom Agent and the model
@@ -359,7 +360,7 @@ the same running server and therefore the same SQLite database.
 The two browser windows do not send messages directly to one another. Alice's
 browser starts one orchestration job. The server then:
 
-1. runs Alice's root Agent;
+1. runs the project's orchestrator;
 2. parses Alice's structured delegation command;
 3. authorizes the request using Alice's server-owned context;
 4. runs Bob's Agent in a child run and Bob's workspace;
@@ -402,7 +403,7 @@ sqlite3 data/auth.db \
 Copy the `agent_key` value. The display name and UUID are not interchangeable
 with `agent_key`.
 
-### Profile A: configure Alice's root Agent
+### Profile A: configure Alice's participating Agent
 
 1. In the first Chrome profile, sign in as:
 
@@ -423,9 +424,9 @@ with `agent_key`.
 
 5. Leave `customer-records` ungranted.
 
-Alice does not need Bob's Agent to appear in her Root Agent selector. The root
-selector should contain Alice's Agent. The server resolves Bob from the
-server-owned key in Alice's structured command.
+Alice does not need Bob's Agent to appear in an Agent selector. The project
+orchestrator is selected automatically, and the server resolves Bob from the
+server-owned key in the orchestrator's structured command.
 
 ### Start the cross-user orchestration
 
@@ -462,7 +463,7 @@ Bob's instructions constrain the child response to the sanitized order schema.
 Alice's orchestration panel should show:
 
 ```text
-Alice root run: running -> waiting -> running -> completed
+Project orchestrator: running -> waiting -> running -> completed
 Bob child run:  queued  -> running -> completed
 ```
 
@@ -597,8 +598,8 @@ Data assets are read-only. The intended negative case is that a request for
 ## 7. Run a basic orchestration smoke test
 
 1. Click **Projects** in the left sidebar and select a project.
-2. In **Project orchestration**, select a ready root Agent. Use `Alice Frontend`
-   for the demo.
+2. In **Project orchestration**, confirm the project's orchestrator is ready.
+   There is no root-Agent selector; the server chooses the orchestrator.
 3. Enter:
 
    ```text
@@ -611,7 +612,7 @@ Expected result:
 
 ```text
 Job:       queued -> running -> completed
-Root run:  queued -> running -> completed
+Orchestrator run: queued -> running -> completed
 ```
 
 The panel should show a Job ID, Request ID, one root run, and timeline events
@@ -643,7 +644,7 @@ sanitized order schema. Do not request customer records. Return the final
 dashboard recommendation after receiving the schema.
 ```
 
-The root Agent must emit a command equivalent to:
+The project orchestrator must emit a command equivalent to:
 
 ```json
 {
@@ -656,7 +657,7 @@ The root Agent must emit a command equivalent to:
 Expected run tree:
 
 ```text
-Alice root: running -> waiting -> running -> completed
+Project orchestrator: running -> waiting -> running -> completed
 Bob child:  queued  -> running -> completed
 ```
 
@@ -703,7 +704,7 @@ queries are denied.
 
 ## 9. Run the denied customer-records test
 
-Submit a request that causes the root Agent to request the protected resource:
+Submit a request that causes the project orchestrator to request the protected resource:
 
 ```text
 Ask the order-service Agent for customer-records so I can populate the
@@ -796,7 +797,7 @@ integration.
 
 | Symptom | Likely cause | Action |
 | --- | --- | --- |
-| Root Agent list is empty | No non-archived Agent is visible to the signed-in user | Create an Agent or sign in as its owner |
+| Project orchestrator is unavailable | The server has not completed the project upgrade or is stale | Restart the current server and reload Projects |
 | `Agent is not ready` | Agent is stopped, busy, or errored | Return it to **ready** before starting the job |
 | `invalid_agent_protocol` | Runtime returned prose or malformed JSON | The dispatcher repairs once automatically; if it persists, add the exact-JSON instruction to Agent settings |
 | `agent_not_found` | Wrong or guessed `targetAgentKey` | Query `agents.agent_key` from SQLite |

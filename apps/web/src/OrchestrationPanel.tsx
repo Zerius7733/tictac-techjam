@@ -5,12 +5,15 @@ import type {
   OrchestrationJob,
   OrchestrationMessage,
   OrchestrationRun,
+  ProjectOrchestrator,
 } from "./types";
 
 interface OrchestrationPanelProps {
   agents: OrchestrationAgentOption[];
-  projectId?: string;
-  projectName?: string;
+  currentUserId: string;
+  projectId: string;
+  projectName: string;
+  orchestrator: ProjectOrchestrator;
 }
 
 export interface OrchestrationAgentOption {
@@ -32,6 +35,55 @@ function formatTime(value: string): string {
   }).format(new Date(value));
 }
 
+interface PersistedOrchestrationState {
+  version: 1;
+  jobId: string | null;
+  prompt: string;
+}
+
+function orchestrationJobStorageKey(projectId: string, userId: string): string {
+  return `launchpad.project-orchestration.${projectId}.${userId}`;
+}
+
+function orchestrationDraftStorageKey(projectId: string, userId: string): string {
+  return `launchpad.project-orchestration-draft.${projectId}.${userId}`;
+}
+
+function readPersistedOrchestration(
+  projectId: string,
+  userId: string,
+): PersistedOrchestrationState {
+  try {
+    const jobId = window.localStorage.getItem(orchestrationJobStorageKey(projectId, userId));
+    const prompt = window.localStorage.getItem(orchestrationDraftStorageKey(projectId, userId));
+    return {
+      version: 1,
+      jobId: jobId || null,
+      prompt: prompt ?? "",
+    };
+  } catch {
+    return { version: 1, jobId: null, prompt: "" };
+  }
+}
+
+function writePersistedOrchestration(
+  projectId: string,
+  userId: string,
+  state: PersistedOrchestrationState,
+): void {
+  try {
+    const jobKey = orchestrationJobStorageKey(projectId, userId);
+    if (state.jobId) window.localStorage.setItem(jobKey, state.jobId);
+    else window.localStorage.removeItem(jobKey);
+    window.localStorage.setItem(
+      orchestrationDraftStorageKey(projectId, userId),
+      state.prompt,
+    );
+  } catch {
+    // Browser storage can be unavailable in private or restricted contexts.
+  }
+}
+
 function statusLabel(status: string): string {
   return status.replaceAll("_", " ");
 }
@@ -40,7 +92,7 @@ function messageTitle(message: OrchestrationMessage, names: Map<string, string>)
   if (message.senderKind === "agent" && message.senderKey) {
     return names.get(message.senderKey) ?? message.senderKey;
   }
-  if (message.senderKind === "orchestrator") return "Authorization gateway";
+  if (message.senderKind === "orchestrator") return "Orchestration gateway";
   if (message.senderKind === "system") return "System";
   return "You";
 }
@@ -156,6 +208,87 @@ function activityProgress(status: OrchestrationRun["status"]): number {
   return 100;
 }
 
+function runtimeActivityDetail(
+  run: OrchestrationRun,
+  latest: OrchestrationMessage | undefined,
+): string {
+  if (!latest) {
+    return run.status === "running"
+      ? "Runtime has not reported its first event yet."
+      : "No runtime event recorded yet.";
+  }
+  if (latest.payload.event === "runtime_progress") {
+    const detail = payloadString(latest.payload, "detail");
+    const stage = payloadString(latest.payload, "stage");
+    if (stage === "heartbeat") return `Last heartbeat · ${formatTime(latest.createdAt)}`;
+    return detail
+      ? `Runtime event: ${detail} · ${formatTime(latest.createdAt)}`
+      : `Runtime update · ${formatTime(latest.createdAt)}`;
+  }
+  return `Latest event: ${latest.messageType.replaceAll("_", " ")}`;
+}
+
+function isRuntimeProgressMessage(message: OrchestrationMessage): boolean {
+  return payloadString(message.payload, "event") === "runtime_progress";
+}
+
+function runtimeSummary(
+  job: OrchestrationJob,
+  latest: OrchestrationMessage | undefined,
+): { state: "starting" | "active" | "complete" | "stopped"; label: string; detail: string } {
+  if (job.status === "completed") {
+    return {
+      state: "complete",
+      label: "Finished",
+      detail: latest
+        ? `Last event · ${payloadString(latest.payload, "detail") ?? "completed"}`
+        : "Run completed successfully.",
+    };
+  }
+  if (job.status === "failed" || job.status === "cancelled") {
+    return {
+      state: "stopped",
+      label: job.status === "failed" ? "Stopped" : "Cancelled",
+      detail: job.status === "failed" ? "Runtime stopped with an error." : "Runtime stopped by the user.",
+    };
+  }
+  if (!latest) {
+    return {
+      state: "starting",
+      label: "Starting up",
+      detail: "Waiting for the first runtime event.",
+    };
+  }
+  const stage = payloadString(latest.payload, "stage");
+  if (stage === "runtime_started") {
+    return {
+      state: "starting",
+      label: "Starting up",
+      detail: "Runtime started · waiting for the first event.",
+    };
+  }
+  return {
+    state: "active",
+    label: "Active",
+    detail: latest
+      ? `Last event · ${payloadString(latest.payload, "detail") ?? "runtime update"}`
+      : "Runtime is processing the request.",
+  };
+}
+
+function staleRuntimeWarning(
+  run: OrchestrationRun,
+  latest: OrchestrationMessage | undefined,
+  now: number,
+): string | null {
+  if (run.status !== "running") return null;
+  const lastActivity = Date.parse(latest?.createdAt ?? run.startedAt ?? run.createdAt);
+  if (!Number.isFinite(lastActivity)) return null;
+  const seconds = Math.floor((now - lastActivity) / 1_000);
+  if (seconds < 45) return null;
+  return `No runtime update for ${seconds}s. Inspect the runtime or cancel this job.`;
+}
+
 function runActivity(
   run: OrchestrationRun,
   message: OrchestrationMessage | undefined,
@@ -223,12 +356,13 @@ function ExpandableOutput({ summary, raw, expanded, onToggle }: ExpandableOutput
   );
 }
 
-export function OrchestrationPanel({ agents, projectId, projectName }: OrchestrationPanelProps) {
-  const availableAgents = useMemo(
-    () => agents.filter((agent) => agent.status !== "archived"),
-    [agents],
-  );
-  const [agentId, setAgentId] = useState("");
+export function OrchestrationPanel({
+  agents,
+  currentUserId,
+  projectId,
+  projectName,
+  orchestrator,
+}: OrchestrationPanelProps) {
   const [prompt, setPrompt] = useState("");
   const [job, setJob] = useState<OrchestrationJob | null>(null);
   const [runs, setRuns] = useState<OrchestrationRun[]>([]);
@@ -237,14 +371,68 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!availableAgents.some((agent) => agent.id === agentId)) {
-      setAgentId("");
-    }
-  }, [agentId, availableAgents]);
+    let disposed = false;
+    const persisted = readPersistedOrchestration(projectId, currentUserId);
+    setLoadedProjectId(null);
+    setPrompt(persisted.prompt);
+    setJob(null);
+    setRuns([]);
+    setMessages([]);
+    setExpandedIds(new Set());
+    setError(null);
+
+    const restore = async () => {
+      if (!persisted.jobId) {
+        if (!disposed) setLoadedProjectId(projectId);
+        return;
+      }
+      try {
+        const [state, timeline] = await Promise.all([
+          api.orchestration(persisted.jobId),
+          api.orchestrationMessages(persisted.jobId),
+        ]);
+        if (disposed) return;
+        if (state.job.projectId !== projectId) {
+          writePersistedOrchestration(projectId, currentUserId, { ...persisted, jobId: null });
+          setLoadedProjectId(projectId);
+          return;
+        }
+        setJob(state.job);
+        setRuns(state.runs);
+        setMessages(timeline.messages);
+      } catch (reason) {
+        if (!disposed) {
+          // A deleted or inaccessible job should not prevent the project from
+          // opening; the persisted pointer is simply stale.
+          writePersistedOrchestration(projectId, currentUserId, { ...persisted, jobId: null });
+          if (reason instanceof ApiError && reason.status >= 500) {
+            setError(reason.message);
+          }
+        }
+      } finally {
+        if (!disposed) setLoadedProjectId(projectId);
+      }
+    };
+    void restore();
+    return () => {
+      disposed = true;
+    };
+  }, [currentUserId, projectId]);
 
   useEffect(() => {
+    if (loadedProjectId !== projectId) return;
+    writePersistedOrchestration(projectId, currentUserId, {
+      version: 1,
+      jobId: job?.id ?? null,
+      prompt,
+    });
+  }, [currentUserId, job?.id, loadedProjectId, projectId, prompt]);
+
+  useEffect(() => {
+    if (loadedProjectId !== projectId) return;
     const jobId = job?.id;
     const jobStatus = job?.status;
     if (!jobId || !jobStatus || !activeStatuses.has(jobStatus)) return;
@@ -271,7 +459,7 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [job?.id, job?.status]);
+  }, [job?.id, job?.status, loadedProjectId, projectId]);
 
   const hasActiveRuns = runs.some((run) => activeStatuses.has(run.status));
   useEffect(() => {
@@ -282,14 +470,13 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
 
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (!agentId || !prompt.trim() || busy) return;
+    if (!prompt.trim() || busy) return;
     setBusy(true);
     setError(null);
     try {
       const created = await api.createOrchestration({
-        agentId,
         prompt: prompt.trim(),
-        ...(projectId ? { projectId } : {}),
+        projectId,
       });
       setJob(created.job);
       setRuns([created.run]);
@@ -330,13 +517,15 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
 
   const names = useMemo(
     () =>
-      new Map(
-        agents.flatMap((agent) => [
+      new Map([
+        ...agents.flatMap((agent) => [
           [agent.id, agent.name],
           [agent.agentKey, agent.name],
-        ]),
-      ),
-    [agents],
+        ] as [string, string][]),
+        [orchestrator.id, orchestrator.name],
+        [orchestrator.agentKey, orchestrator.name],
+      ]),
+    [agents, orchestrator],
   );
   const latestMessageByRun = useMemo(() => {
     const latest = new Map<string, OrchestrationMessage>();
@@ -361,7 +550,17 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
     }
     return recovery;
   }, [messages]);
-  const selectedAgent = availableAgents.find((agent) => agent.id === agentId);
+  const runtimeMessages = useMemo(
+    () => messages.filter(isRuntimeProgressMessage),
+    [messages],
+  );
+  const timelineMessages = useMemo(
+    () => messages.filter((message) => !isRuntimeProgressMessage(message)),
+    [messages],
+  );
+  const latestRuntimeMessage = runtimeMessages.at(-1);
+  const runtimeState = job ? runtimeSummary(job, latestRuntimeMessage) : null;
+  const completedRunCount = runs.filter((run) => run.status === "completed").length;
   const toggleExpanded = (id: string) => {
     setExpandedIds((current) => {
       const next = new Set(current);
@@ -375,53 +574,81 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
     <section className="orchestration-panel">
       <header className="orchestration-header">
         <div>
-          <span className="eyebrow">{projectName ? `${projectName} · shared project` : "Multi-Agent workflow"}</span>
-          <h1>{projectName ? "Project orchestration" : "Orchestration playground"}</h1>
-          <p>{projectName ? "The root Agent receives the request first, coordinates the work, and delegates only to the participating Agents in this shared workspace. The gateway enforces project access and authorization." : "The root Agent receives your request first and coordinates delegation; the orchestration gateway enforces Agent access and authorization."}</p>
+          <span className="eyebrow">{projectName} · shared project</span>
+          <h1>Project orchestration</h1>
+          <p>The project orchestrator receives every request, delegates focused work to participating Agents, requests authorized resources when needed, and combines their results.</p>
         </div>
-        {job && <span className={"orchestration-status status-" + job.status}>{statusLabel(job.status)}</span>}
+        {job && (
+          <span className={"orchestration-status status-" + job.status}>
+            {job.status === "completed" ? "✓" : job.status === "failed" ? "!" : "•"}
+            {statusLabel(job.status)}
+          </span>
+        )}
       </header>
 
       {error && <div className="error-banner" role="alert">{error}</div>}
 
       <form className="orchestration-form" onSubmit={submit}>
-        <label>
-          Root Agent
-          <select value={agentId} onChange={(event) => setAgentId(event.target.value)} disabled={busy || availableAgents.length === 0}>
-            <option value="">Choose a root Agent</option>
-            {availableAgents.map((agent) => (
-              <option key={agent.id} value={agent.id}>{agent.name} · {agent.agentKey}{agent.ownerLabel ? ` · ${agent.ownerLabel}` : ""}</option>
-            ))}
-          </select>
-          {selectedAgent && (
-            <small className="orchestration-field-hint">
-              The root Agent is the coordinator for this run. It is not a separate hidden Agent. Delegation key: <code>{selectedAgent.agentKey}</code>
-            </small>
-          )}
-        </label>
+        <div className="project-orchestrator-control">
+          <span className="project-orchestrator-label">Project orchestrator</span>
+          <div className="project-orchestrator-identity">
+            <span>O</span>
+            <div>
+              <strong>{orchestrator.name}</strong>
+              <small>Automatic coordinator · {orchestrator.status}</small>
+            </div>
+          </div>
+          <details>
+            <summary>View orchestrator instructions</summary>
+            <p>{orchestrator.systemPrompt}</p>
+          </details>
+        </div>
         <label>
           Request
           <textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} rows={4} maxLength={50_000} placeholder="Describe what you want the participating Agents to do…" disabled={busy || Boolean(job && activeStatuses.has(job.status))} />
         </label>
         <div className="orchestration-actions">
-          <button className="button button-primary" disabled={busy || !agentId || !prompt.trim() || Boolean(job && activeStatuses.has(job.status))}>
+          <button className="button button-primary" disabled={busy || !prompt.trim() || Boolean(job && activeStatuses.has(job.status))}>
             {busy ? "Working…" : "Start orchestration"}
           </button>
           {job && activeStatuses.has(job.status) && (
             <button type="button" className="button button-danger" onClick={() => void cancel()} disabled={busy}>Cancel job</button>
           )}
           {job && !activeStatuses.has(job.status) && (
-            <button type="button" className="button button-ghost" onClick={() => { setJob(null); setRuns([]); setMessages([]); setError(null); setAgentId(""); setPrompt(""); }}>New job</button>
+            <button type="button" className="button button-ghost" onClick={() => { setJob(null); setRuns([]); setMessages([]); setError(null); setPrompt(""); }}>New job</button>
           )}
         </div>
       </form>
 
       {job && (
         <div className="orchestration-content">
+          {job.status === "completed" && (
+            <div className="orchestration-completion-card" role="status" aria-live="polite">
+              <span className="orchestration-completion-icon" aria-hidden="true">✓</span>
+              <div>
+                <span className="eyebrow">Run complete</span>
+                <strong>Project work is complete</strong>
+                <p>
+                  {completedRunCount === runs.length
+                    ? `All ${runs.length} run${runs.length === 1 ? "" : "s"} finished successfully.`
+                    : `${completedRunCount} of ${runs.length} runs finished successfully.`}{" "}
+                  Review the results below.
+                </p>
+              </div>
+              <small>{job.completedAt ? `Completed · ${formatTime(job.completedAt)}` : "Completed"}</small>
+            </div>
+          )}
           <div className="orchestration-summary">
             <div><span>Job</span><code>{job.id}</code></div>
             <div><span>Request</span><code>{job.requestId}</code></div>
             <div><span>Runs</span><strong>{runs.length}</strong></div>
+            {runtimeState && (
+              <div className={"orchestration-runtime-summary runtime-summary-" + runtimeState.state}>
+                <span>Runtime</span>
+                <strong><i aria-hidden="true" />{runtimeState.label}</strong>
+                <small>{runtimeState.detail}</small>
+              </div>
+            )}
           </div>
           {job.status === "failed" && (
             <div className="orchestration-failure-card" role="alert">
@@ -444,13 +671,14 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
                 {runs.map((run) => {
                   const latest = latestMessageByRun.get(run.id);
                   const agentName = names.get(run.agentId) ?? run.agentId;
+                  const staleWarning = staleRuntimeWarning(run, latest, now);
                   return (
                     <article className="orchestration-live-agent" key={run.id}>
                       <div className="orchestration-live-agent-heading">
                         <span className="orchestration-live-icon">{agentName.slice(0, 1).toUpperCase()}</span>
                         <div>
                           <strong>{agentName}</strong>
-                          <small>{run.parentRunId ? "Delegated child" : "Root run"} · {elapsedLabel(run, now)}</small>
+                          <small>{run.parentRunId ? "Delegated child" : "Project orchestrator"} · {elapsedLabel(run, now)}</small>
                         </div>
                         <span className={"run-state state-" + run.status}>{statusLabel(run.status)}</span>
                       </div>
@@ -458,8 +686,8 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
                       <div className="orchestration-live-track" aria-label={`Activity stage ${statusLabel(run.status)}`}>
                         <span style={{ width: `${activityProgress(run.status)}%` }} />
                       </div>
-                      <small className="orchestration-live-detail">
-                        {latest ? `Latest event: ${latest.messageType.replaceAll("_", " ")}` : "No event yet — the Agent is starting up."}
+                      <small className={"orchestration-live-detail" + (staleWarning ? " orchestration-live-stale" : "")}>
+                        {staleWarning ?? runtimeActivityDetail(run, latest)}
                       </small>
                     </article>
                   );
@@ -475,7 +703,7 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
                 {runs.map((run) => (
                   <article className="orchestration-run" key={run.id}>
                     <div><strong>{names.get(run.agentId) ?? run.agentId}</strong><span className={"run-state state-" + run.status}>{statusLabel(run.status)}</span></div>
-                    <small>{run.parentRunId ? "Delegated child" : "Root run"} · Attempt {run.attempt}{run.errorText && !recoveryAttemptByRun.has(run.id) ? " · no retry recorded" : ""} · {run.id.slice(0, 8)}</small>
+                    <small>{run.parentRunId ? "Delegated child" : "Project orchestrator"} · Attempt {run.attempt}{run.errorText && !recoveryAttemptByRun.has(run.id) ? " · no retry recorded" : ""} · {run.id.slice(0, 8)}</small>
                     {run.errorText && (
                       <div className="orchestration-error-detail">
                         <span className="eyebrow">What went wrong</span>
@@ -497,9 +725,9 @@ export function OrchestrationPanel({ agents, projectId, projectName }: Orchestra
               </div>
             </section>
             <section>
-              <div className="orchestration-section-title"><span className="eyebrow">Timeline</span><strong>{messages.length} event{messages.length === 1 ? "" : "s"}</strong></div>
+              <div className="orchestration-section-title"><span className="eyebrow">Timeline</span><strong>{timelineMessages.length} event{timelineMessages.length === 1 ? "" : "s"}</strong></div>
               <div className="orchestration-timeline">
-                {messages.map((message) => (
+                {timelineMessages.map((message) => (
                   <article className={"orchestration-event event-" + message.messageType} key={message.id}>
                     <div><strong>{messageTitle(message, names)}</strong><span>{message.messageType.replaceAll("_", " ")} · {formatTime(message.createdAt)}</span></div>
                     {message.messageType === "error" ? (

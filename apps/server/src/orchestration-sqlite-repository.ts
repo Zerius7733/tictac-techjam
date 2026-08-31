@@ -67,6 +67,12 @@ const seededProjectInvitationRepairMigration: SqliteMigration = {
   path: path.join(repositoryRoot, "db/migrations/014_reconcile_seeded_project_invitation.sql"),
 };
 
+const projectOrchestratorsMigration: SqliteMigration = {
+  version: 15,
+  name: "015_project_orchestrators.sql",
+  path: path.join(repositoryRoot, "db/migrations/015_project_orchestrators.sql"),
+};
+
 export const orchestrationMigrations: readonly SqliteMigration[] = [
   defaultMigration,
   waitingRunMigration,
@@ -74,6 +80,7 @@ export const orchestrationMigrations: readonly SqliteMigration[] = [
   projectCollaborationMigration,
   projectInvitationsMigration,
   seededProjectInvitationRepairMigration,
+  projectOrchestratorsMigration,
 ];
 
 type SqlRow = Record<string, unknown>;

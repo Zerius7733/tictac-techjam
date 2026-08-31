@@ -95,9 +95,20 @@ export interface Project {
   description: string;
   ownerUserId: string;
   workspacePath: string;
+  orchestratorAgentId: string;
+  orchestratorSystemPrompt: string;
   currentRole: ProjectRole;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ProjectOrchestrator {
+  id: string;
+  agentKey: string;
+  name: string;
+  workspacePath: string;
+  status: AgentStatus;
+  systemPrompt: string;
 }
 
 export interface ProjectMember {
@@ -164,6 +175,7 @@ export interface ProjectSummary extends Project {
 }
 
 export interface ProjectDetails extends Project {
+  orchestrator: ProjectOrchestrator;
   members: ProjectMember[];
   agents: ProjectAgent[];
   availableAgents: ProjectAgentCandidate[];

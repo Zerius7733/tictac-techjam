@@ -48,6 +48,21 @@ describe("ProjectStore", () => {
         memberCount: 1,
         agentCount: 0,
       });
+      const projectDetails = projectStore.getProject(project.id, alice!.user.id);
+      expect(projectDetails.orchestrator).toMatchObject({
+        name: "Order Dashboard Orchestrator",
+        status: "ready",
+      });
+      expect(projectDetails.orchestrator.agentKey).toMatch(/^project-orchestrator-/);
+      expect(projectDetails.orchestrator.systemPrompt).toContain(
+        "dedicated orchestrator for the Order Dashboard project",
+      );
+      expect(projectStore.getOrchestrator(project.id, alice!.user.id).id).toBe(
+        projectDetails.orchestrator.id,
+      );
+      expect(agentStore.snapshot().agents.map((agent) => agent.id)).not.toContain(
+        projectDetails.orchestrator.id,
+      );
       expect(projectStore.listCollaboratorCandidates(project.id, alice!.user.id, "bo")).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

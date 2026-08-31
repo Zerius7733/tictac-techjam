@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { createApp } from "./app.js";
 import { AuthStore } from "./auth-store.js";
 import { loadConfig } from "./config.js";
+import { ProjectStore } from "./projects.js";
+import { SqliteAgentStore } from "./sqlite-agent-store.js";
 import type { AgentService } from "./agent-service.js";
 import {
   OrchestrationDispatcher,
@@ -265,5 +267,89 @@ describe("HTTP boundary", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await app.close();
     await cancelApp.close();
+  });
+
+  it("resolves a project's orchestrator when no root Agent is submitted", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "launchpad-http-project-orchestrator-test-"));
+    const databasePath = path.join(root, "auth.db");
+    const authStore = new AuthStore(databasePath);
+    const agentStore = new SqliteAgentStore(databasePath);
+    const projectStore = new ProjectStore(databasePath, path.join(root, "workspaces"));
+    const repository = new InMemoryOrchestrationRepository();
+    let app: Awaited<ReturnType<typeof createApp>> | undefined;
+    try {
+      await authStore.initialize(true);
+      await agentStore.initialize();
+      await projectStore.initialize(true);
+      const login = authStore.login("alice", "alice-demo-2026", "project-orchestrator-test");
+      expect(login).not.toBeNull();
+      const project = projectStore.listProjects(login!.user.id)[0]!;
+      const orchestrator = projectStore.getOrchestrator(project.id, login!.user.id);
+      const directory: OrchestrationAgentDirectory = {
+        getAgentById: (id) => (id === orchestrator.id ? orchestrator : null),
+        getAgentByKey: (key) => (key === orchestrator.agentKey ? orchestrator : null),
+      };
+      const dispatcher = new OrchestrationDispatcher(
+        repository,
+        directory,
+        new RecordingAuthorizer(() => ({
+          allowed: true,
+          reasonCode: "permission_granted",
+          auditLogId: "audit-project-orchestrator",
+        })),
+        new ScriptedAgentRunner([
+          {
+            output:
+              '{"type":"final","summary":"Completed the project task.","content":"Project orchestrator completed the task.","targetAgentKey":null,"task":null,"action":null,"resourceType":null,"resourceKey":null,"purpose":null}',
+            threadId: "project-orchestrator-thread",
+            usage: null,
+          },
+        ]),
+        {
+          projectAccess: projectStore,
+          collaborativeOutputSchemaPath: "/tmp/orchestration-output.schema.json",
+        },
+      );
+      app = await createApp(
+        loadConfig({ NODE_ENV: "test" }),
+        service,
+        authStore,
+        {
+          repository,
+          dispatcher,
+          agents: directory,
+          authorizer: new RecordingAuthorizer(() => ({
+            allowed: true,
+            reasonCode: "permission_granted",
+            auditLogId: "audit-project-orchestrator",
+          })),
+        },
+        undefined,
+        projectStore,
+      );
+
+      const created = await app.inject({
+        method: "POST",
+        url: "/api/orchestrations",
+        headers: { authorization: "Bearer " + login!.sessionToken },
+        payload: { projectId: project.id, prompt: "Coordinate the project task" },
+      });
+      expect(created.statusCode).toBe(202);
+      const createdBody = created.json() as {
+        job: { id: string };
+        run: { agentId: string };
+      };
+      expect(createdBody.run.agentId).toBe(orchestrator.id);
+      await expect.poll(() => repository.getJob(createdBody.job.id)?.status).toBe("completed");
+      expect(repository.getJob(createdBody.job.id)?.outputText).toBe(
+        "Project orchestrator completed the task.",
+      );
+    } finally {
+      await app?.close();
+      projectStore.close();
+      agentStore.close();
+      authStore.close();
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });

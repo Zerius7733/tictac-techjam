@@ -1,7 +1,11 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { AppConfig } from "./config.js";
-import { buildCodexArgs, parseCodexEventLine } from "./codex-runner.js";
+import {
+  buildCodexArgs,
+  parseCodexEventLine,
+  reportRunnerProgress,
+} from "./codex-runner.js";
 import { RunCancelledError } from "./errors.js";
 import type {
   AgentRunner,
@@ -176,6 +180,10 @@ export class ContainerCodexRunner implements AgentRunner {
       termination: null,
     };
     this.active.set(request.agentId, active);
+    reportRunnerProgress(request, {
+      stage: "runtime_started",
+      detail: "Agent Runtime container started.",
+    });
 
     const parsed: ParsedEvents = {
       messages: [],
@@ -198,7 +206,15 @@ export class ContainerCodexRunner implements AgentRunner {
         stdout += chunk.toString("utf8");
         const lines = stdout.split(/\r?\n/);
         stdout = lines.pop() ?? "";
-        for (const line of lines) parseCodexEventLine(line, parsed);
+        for (const line of lines) {
+          const eventType = parseCodexEventLine(line, parsed);
+          if (eventType) {
+            reportRunnerProgress(request, {
+              stage: "codex_event",
+              detail: eventType,
+            });
+          }
+        }
       } else {
         stderr += chunk.toString("utf8");
         if (stderr.length > 16_384) stderr = stderr.slice(-16_384);
@@ -219,7 +235,15 @@ export class ContainerCodexRunner implements AgentRunner {
         child.once("error", reject);
         child.once("close", (code) => resolve(code ?? 1));
       });
-      if (stdout.trim()) parseCodexEventLine(stdout.trim(), parsed);
+      if (stdout.trim()) {
+        const eventType = parseCodexEventLine(stdout.trim(), parsed);
+        if (eventType) {
+          reportRunnerProgress(request, {
+            stage: "codex_event",
+            detail: eventType,
+          });
+        }
+      }
       if (active.cancelled) throw new RunCancelledError();
       if (active.timedOut) {
         throw new Error("Runtime timed out after " + this.config.codexTimeoutMs + " ms");

@@ -43,7 +43,10 @@ export class ScriptedAgentRunner implements AgentRunner {
   constructor(private readonly scripts: RunnerScript[] = []) {}
 
   async run(request: RunnerRequest): Promise<RunnerResult> {
-    this.requests.push(structuredClone(request));
+    // Progress callbacks are process-local and cannot be structured-cloned;
+    // keep the recorded request safe and deterministic for assertions.
+    const { onProgress: _onProgress, ...requestForRecording } = request;
+    this.requests.push(structuredClone(requestForRecording));
     const script = this.scripts.shift();
     if (script === undefined) {
       throw new Error("No scripted runner result is available");

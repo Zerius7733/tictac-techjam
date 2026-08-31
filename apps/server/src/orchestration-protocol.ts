@@ -39,6 +39,20 @@ export const delegateAgentCommandSchema = z
   })
   .strict();
 
+const parallelDelegationSchema = z
+  .object({
+    targetAgentKey: agentKey,
+    task: boundedText(50_000),
+  })
+  .strict();
+
+export const parallelDelegateAgentCommandSchema = z
+  .object({
+    type: z.literal("delegate_parallel"),
+    delegations: z.array(parallelDelegationSchema).min(2).max(8),
+  })
+  .strict();
+
 export const resourceRequestCommandSchema = z
   .object({
     type: z.literal("resource_request"),
@@ -58,11 +72,15 @@ export const resourceRequestCommandSchema = z
 export const agentCommandSchema = z.discriminatedUnion("type", [
   finalAgentCommandSchema,
   delegateAgentCommandSchema,
+  parallelDelegateAgentCommandSchema,
   resourceRequestCommandSchema,
 ]);
 
 export type FinalAgentCommand = z.infer<typeof finalAgentCommandSchema>;
 export type DelegateAgentCommand = z.infer<typeof delegateAgentCommandSchema>;
+export type ParallelDelegateAgentCommand = z.infer<
+  typeof parallelDelegateAgentCommandSchema
+>;
 export type ResourceRequestCommand = z.infer<
   typeof resourceRequestCommandSchema
 >;
@@ -101,6 +119,7 @@ export function parseAgentCommand(output: string): AgentCommand {
       "resourceKey",
       "purpose",
       "query",
+      "delegations",
     ]);
     value = Object.fromEntries(
       Object.entries(value).filter(

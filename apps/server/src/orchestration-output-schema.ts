@@ -10,7 +10,8 @@ import path from "node:path";
  * but rejects a root-level `oneOf`. The command-specific rules therefore stay
  * in `parseAgentCommand`; this runtime schema supplies a provider-compatible
  * envelope and uses nullable fields for properties that do not apply to the
- * selected command type.
+ * selected command type. Parallel delegation uses a bounded array of focused
+ * tasks so the orchestrator can explicitly opt into independent work.
  */
 export const collaborativeOutputSchema = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
@@ -28,11 +29,12 @@ export const collaborativeOutputSchema = {
     "resourceKey",
     "purpose",
     "query",
+    "delegations",
   ],
   properties: {
     type: {
       type: "string",
-      enum: ["final", "delegate", "resource_request"],
+      enum: ["final", "delegate", "delegate_parallel", "resource_request"],
     },
     summary: { type: ["string", "null"] },
     // Structured output schemas do not support unconstrained object/array
@@ -46,6 +48,20 @@ export const collaborativeOutputSchema = {
     resourceKey: { type: ["string", "null"] },
     purpose: { type: ["string", "null"] },
     query: { type: ["string", "null"] },
+    delegations: {
+      type: ["array", "null"],
+      minItems: 2,
+      maxItems: 8,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["targetAgentKey", "task"],
+        properties: {
+          targetAgentKey: { type: "string" },
+          task: { type: "string" },
+        },
+      },
+    },
   },
 } as const;
 

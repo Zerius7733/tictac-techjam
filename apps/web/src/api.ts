@@ -175,7 +175,7 @@ export const api = {
       },
     ),
   run: (id: string) => request<{ run: AgentRun }>("/api/runs/" + id),
-  createOrchestration: (body: { agentId: string; prompt: string; projectId?: string }) =>
+  createOrchestration: (body: { agentId?: string; prompt: string; projectId?: string }) =>
     request<{
       requestId: string;
       job: OrchestrationJob;

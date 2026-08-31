@@ -50,6 +50,17 @@ describe("structured Agent orchestration protocol", () => {
       resourceKey: "database",
       query: "orders.list?status=pending&limit=10",
     });
+    expect(
+      parseAgentCommand(
+        '{"type":"delegate_parallel","targetAgentKey":null,"task":null,"summary":null,"content":null,"action":null,"resourceType":null,"resourceKey":null,"purpose":null,"delegations":[{"targetAgentKey":"alice-frontend","task":"Build the UI shell."},{"targetAgentKey":"bob-order-service","task":"Define the API contract."}]}',
+      ),
+    ).toEqual({
+      type: "delegate_parallel",
+      delegations: [
+        { targetAgentKey: "alice-frontend", task: "Build the UI shell." },
+        { targetAgentKey: "bob-order-service", task: "Define the API contract." },
+      ],
+    });
   });
 
   it("accepts nullable placeholders emitted by the collaborative Runtime schema", () => {

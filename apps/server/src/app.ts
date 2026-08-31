@@ -52,10 +52,13 @@ const loginBody = z.object({
   password: z.string().min(1).max(256),
 });
 const orchestrationBody = z.object({
-  agentId: z.string().uuid(),
+  agentId: z.string().uuid().optional(),
   projectId: z.string().uuid().optional(),
   prompt: z.string().trim().min(1).max(50_000),
-});
+}).refine(
+  (value) => Boolean(value.projectId || value.agentId),
+  "A project or Agent is required",
+);
 const projectIdParams = z.object({ id: z.string().uuid() });
 const projectAgentParams = z.object({ id: z.string().uuid(), agentId: z.string().uuid() });
 const projectInvitationParams = z.object({ id: z.string().uuid() });
@@ -746,31 +749,52 @@ export async function createApp(
       return;
     }
     const body = orchestrationBody.parse(request.body);
-    const agent = orchestration.agents.getAgentById(body.agentId);
-    if (!agent) return reply.code(404).send({ error: "Agent not found" });
+    let agent: ReturnType<OrchestrationAgentDirectory["getAgentById"]>;
     if (body.projectId) {
       if (!projectStore || !request.auth) {
         return reply.code(503).send({ error: "Project collaboration is not configured" });
       }
-      if (!projectStore.canUseAgent(body.projectId, request.auth.userId, agent.id, isAdmin(request))) {
+      if (!projectStore.canViewProject(body.projectId, request.auth.userId, isAdmin(request))) {
+        return reply.code(404).send({ error: "Project not found" });
+      }
+      if (!projectStore.canEditProject(body.projectId, request.auth.userId, isAdmin(request))) {
         return reply.code(403).send({
-          error: "Agent is not participating in this project",
-          reasonCode: "agent_not_in_project",
+          error: "Viewer access cannot run project jobs",
+          reasonCode: "project_edit_required",
         });
       }
-    } else if (
-      request.auth &&
-      !isAdmin(request) &&
-      agent.ownerUserId !== undefined &&
-      agent.ownerUserId !== null &&
-      agent.ownerUserId !== request.auth.userId
-    ) {
-      return reply.code(404).send({ error: "Agent not found" });
+      const orchestrator = projectStore.getOrchestrator(
+        body.projectId,
+        request.auth.userId,
+        isAdmin(request),
+      );
+      agent = orchestration.agents.getAgentById(orchestrator.id);
+      if (!agent) {
+        return reply.code(503).send({
+          error: "Project orchestrator is not available",
+          reasonCode: "project_orchestrator_not_available",
+        });
+      }
+    } else {
+      agent = body.agentId
+        ? orchestration.agents.getAgentById(body.agentId)
+        : null;
+      if (!agent) return reply.code(404).send({ error: "Agent not found" });
+      if (
+        request.auth &&
+        !isAdmin(request) &&
+        agent.ownerUserId !== undefined &&
+        agent.ownerUserId !== null &&
+        agent.ownerUserId !== request.auth.userId
+      ) {
+        return reply.code(404).send({ error: "Agent not found" });
+      }
     }
     if (agent.status !== "ready") {
       return reply.code(409).send({ error: "Agent is not ready" });
     }
     if (
+      !body.projectId &&
       !(await requireOrchestrationPermission(
         request,
         reply,
@@ -791,7 +815,7 @@ export async function createApp(
         userId: authStore ? context.userId : null,
         projectId: body.projectId ?? null,
         inputText: body.prompt,
-        agentId: body.agentId,
+        agentId: agent.id,
         prompt: body.prompt,
       });
     } catch (error) {
