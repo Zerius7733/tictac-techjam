@@ -805,3 +805,34 @@ integration.
 | `authorization_denied` | Missing or revoked invocation/capability grant | Check Security & Policy and the authorization integration |
 | Runtime configuration banner | Ark key/model or Codex Runtime unavailable | Fix `.env`, Docker/Colima/Podman, or host Codex setup |
 | 401 responses | Session expired or wrong account | Log in again |
+
+## 13. Run the automated browser test
+
+The repository includes a deterministic Playwright suite for the orchestration
+UI. It starts the Vite frontend, mocks the API responses, and exercises the
+same rendered React flow without requiring Docker, Codex credentials, or an
+external model provider.
+
+Install dependencies and the Chromium browser once:
+
+```bash
+npm install
+npx playwright install chromium
+```
+
+Run the suite from the repository root:
+
+```bash
+npm run test:e2e
+```
+
+The suite verifies:
+
+- the approved Alice-to-Bob request completes and displays both runs;
+- the protected users result contains only approved fields;
+- forbidden customer/private-data requests render a safe denial; and
+- the completed orchestration is restored after a browser reload.
+
+The test source is `e2e/orchestration.spec.ts`, and its API mock is deliberate:
+this test is intended to be stable in CI. The live Docker/Codex flow remains a
+separate manual or environment-specific test using the earlier sections.
