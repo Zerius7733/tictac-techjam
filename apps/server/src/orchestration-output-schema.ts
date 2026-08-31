@@ -5,68 +5,46 @@ import path from "node:path";
  * The schema used by collaborative project runs. Keeping this at the runtime
  * boundary means every participating Agent returns a command the dispatcher
  * can route, rather than relying only on prompt instructions.
+ *
+ * The Ark structured-output validator accepts one object at the schema root,
+ * but rejects a root-level `oneOf`. The command-specific rules therefore stay
+ * in `parseAgentCommand`; this runtime schema supplies a provider-compatible
+ * envelope and uses nullable fields for properties that do not apply to the
+ * selected command type.
  */
 export const collaborativeOutputSchema = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   title: "Launchpad collaborative orchestration command",
-  oneOf: [
-    {
-      type: "object",
-      additionalProperties: false,
-      required: ["type", "content"],
-      properties: {
-        type: { const: "final" },
-        summary: { type: "string", minLength: 1, maxLength: 280 },
-        content: {
-          anyOf: [
-            { type: "string", minLength: 1, maxLength: 50000 },
-            { type: "object" },
-            { type: "array" },
-          ],
-        },
-      },
-    },
-    {
-      type: "object",
-      additionalProperties: false,
-      required: ["type", "targetAgentKey", "task"],
-      properties: {
-        type: { const: "delegate" },
-        targetAgentKey: {
-          type: "string",
-          minLength: 1,
-          maxLength: 80,
-          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-        },
-        task: { type: "string", minLength: 1, maxLength: 50000 },
-      },
-    },
-    {
-      type: "object",
-      additionalProperties: false,
-      required: [
-        "type",
-        "targetAgentKey",
-        "action",
-        "resourceType",
-        "resourceKey",
-        "purpose",
-      ],
-      properties: {
-        type: { const: "resource_request" },
-        targetAgentKey: {
-          type: "string",
-          minLength: 1,
-          maxLength: 80,
-          pattern: "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-        },
-        action: { type: "string", minLength: 1, maxLength: 80 },
-        resourceType: { type: "string", minLength: 1, maxLength: 80 },
-        resourceKey: { type: "string", minLength: 1, maxLength: 160 },
-        purpose: { type: "string", minLength: 1, maxLength: 2000 },
-      },
-    },
+  type: "object",
+  additionalProperties: false,
+  required: [
+    "type",
+    "summary",
+    "content",
+    "targetAgentKey",
+    "task",
+    "action",
+    "resourceType",
+    "resourceKey",
+    "purpose",
   ],
+  properties: {
+    type: {
+      type: "string",
+      enum: ["final", "delegate", "resource_request"],
+    },
+    summary: { type: ["string", "null"] },
+    // Structured output schemas do not support unconstrained object/array
+    // values reliably across providers. Agents can still put JSON data in
+    // this string; non-collaborative runs retain the richer Zod union.
+    content: { type: ["string", "null"] },
+    targetAgentKey: { type: ["string", "null"] },
+    task: { type: ["string", "null"] },
+    action: { type: ["string", "null"] },
+    resourceType: { type: ["string", "null"] },
+    resourceKey: { type: ["string", "null"] },
+    purpose: { type: ["string", "null"] },
+  },
 } as const;
 
 /** Write the schema into the app data directory and return its host path. */

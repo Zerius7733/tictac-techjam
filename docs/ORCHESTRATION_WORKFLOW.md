@@ -389,9 +389,10 @@ an Agent cannot override it by asking again in prose.
 
 - Project runs pass a runtime-enforced response schema to Codex. Every
   participating Agent must return exactly one `final`, `delegate`, or
-  `resource_request` command with the required fields; structured result data
-  belongs under `final.content`. The schema is mounted read-only for container
-  Runtimes, so this contract is not prompt-only.
+  `resource_request` command with the required fields; fields that do not apply
+  are represented as `null`, and structured result data belongs under
+  `final.content` as a JSON string. The schema is mounted read-only for
+  container Runtimes, so this contract is not prompt-only.
 - Invalid JSON, invalid commands, and clearly transient runner failures receive
   one bounded repair turn by default. The dispatcher keeps the same run,
   increments its attempt, records a recovery event, and asks the Agent to

@@ -1036,7 +1036,7 @@ function structuredPrompt(
     ...(collaborative
       ? [
           "This is a shared project run. The runtime enforces this response template; return exactly one object with type final, delegate, or resource_request and the fields described above.",
-          "Put structured result data under final.content. Never return a bare result object, markdown, or explanatory prose outside the command object.",
+          "Set fields that do not apply to the selected command to null. Put structured result data under final.content as a JSON string. Never return a bare result object, markdown, or explanatory prose outside the command object.",
         ]
       : []),
     ...roster,
@@ -1054,6 +1054,7 @@ function recoveryPrompt(originalPrompt: string, reason: string): string {
     'For a final response use {"type":"final","summary":"Short plain-language summary of what you did.","content":"Full result, including any structured data."}.',
     'For delegation use {"type":"delegate","targetAgentKey":"...","task":"..."}.',
     'For protected data use {"type":"resource_request","targetAgentKey":"...","action":"read","resourceType":"data_asset","resourceKey":"...","purpose":"..."}.',
+    "When a shared-project response schema is present, set fields that do not apply to null and keep final.content as a JSON string.",
     "Original task:",
     originalPrompt,
   ].join("\n");

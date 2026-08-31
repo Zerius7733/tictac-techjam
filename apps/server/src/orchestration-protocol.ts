@@ -81,6 +81,29 @@ export function parseAgentCommand(output: string): AgentCommand {
     throw new AgentProtocolError("Agent output must be valid JSON");
   }
 
+  // Collaborative Runtime schemas use a single provider-compatible object
+  // with nullable fields for command variants. Remove only those null
+  // placeholders before applying the strict discriminated command schemas;
+  // non-null extra fields remain errors instead of being silently ignored.
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const nullableCommandFields = new Set([
+      "summary",
+      "content",
+      "targetAgentKey",
+      "task",
+      "action",
+      "resourceType",
+      "resourceKey",
+      "purpose",
+    ]);
+    value = Object.fromEntries(
+      Object.entries(value).filter(
+        ([fieldName, fieldValue]) =>
+          fieldValue !== null || !nullableCommandFields.has(fieldName),
+      ),
+    );
+  }
+
   const parsed = agentCommandSchema.safeParse(value);
   if (!parsed.success) {
     const issue = parsed.error.issues[0];

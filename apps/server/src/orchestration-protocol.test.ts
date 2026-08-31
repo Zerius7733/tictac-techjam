@@ -48,12 +48,25 @@ describe("structured Agent orchestration protocol", () => {
     ).toMatchObject({ type: "resource_request", resourceKey: "order-schema" });
   });
 
+  it("accepts nullable placeholders emitted by the collaborative Runtime schema", () => {
+    expect(
+      parseAgentCommand(
+        '{"type":"delegate","summary":null,"content":null,"targetAgentKey":"bob-order-service","task":"Provide the approved schema.","action":null,"resourceType":null,"resourceKey":null,"purpose":null}',
+      ),
+    ).toEqual({
+      type: "delegate",
+      targetAgentKey: "bob-order-service",
+      task: "Provide the approved schema.",
+    });
+  });
+
   it("rejects prose, malformed JSON, unknown commands, and identity fields", () => {
     for (const output of [
       "Please ask Bob for the schema.",
       "{not-json}",
       '{"type":"delegate","targetAgentKey":"bob","task":"x","allowed":true}',
       '{"type":"final","content":"x","userId":"admin"}',
+      '{"type":"final","content":"x","userId":null}',
     ]) {
       expect(() => parseAgentCommand(output)).toThrow(AgentProtocolError);
     }

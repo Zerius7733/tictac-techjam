@@ -624,7 +624,9 @@ timeline show a plain-language explanation, the exact safe diagnostic, and the
 next action. Authorization denials and timeouts are explained without an
 automatic retry.
 
-For project runs, the Codex Runtime is also given a fixed response schema. A
+For project runs, the Codex Runtime is also given a fixed response schema. The
+schema uses one provider-compatible root object; fields that do not apply to
+the selected command are `null`, and `final.content` is a JSON string. A
 successful run should therefore produce one of the three command shapes every
 time: `final`, `delegate`, or `resource_request`. The repair event is a fallback
 for an older Runtime image or a temporary execution failure, not the normal
