@@ -251,6 +251,7 @@ button {
 
 .sidebar-label {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   padding: 25px 7px 10px;
   color: #85857e;
@@ -258,6 +259,37 @@ button {
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
+}
+
+.agent-list-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.agent-refresh-button {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 7px;
+  color: #aaa8a0;
+  font-size: 17px;
+  line-height: 1;
+}
+
+.agent-refresh-button:hover:not(:disabled) {
+  color: #e8e5ff;
+  background: #353430;
+}
+
+.agent-refresh-button:disabled {
+  cursor: wait;
+  opacity: 0.7;
+}
+
+.agent-refresh-button.is-refreshing span {
+  display: inline-block;
+  animation: spin 0.8s linear infinite;
 }
 
 .agent-list {

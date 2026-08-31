@@ -113,6 +113,10 @@ cross-owner authorization configuration.
 4. Create a second Agent named `Bob Order Service Local`.
 5. Confirm both Agents show status **ready**.
 
+If an Agent status looks stale, click the **↻** refresh icon beside **Your
+Agents** in the sidebar. It re-fetches `/api/agents` and updates the status
+badges without reloading the page or clearing the current view.
+
 ### Option B: Alice/Bob identity test (separate owners)
 
 1. Sign in as Alice and create `Alice Frontend Local`.

@@ -451,6 +451,7 @@ export default function App() {
   const [chatMode, setChatMode] = useState<ChatMode>("agent");
   const [activeRun, setActiveRun] = useState<AgentRun | null>(null);
   const [busy, setBusy] = useState(false);
+  const [refreshingAgents, setRefreshingAgents] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [authStage, setAuthStage] = useState<AuthStage>("loading");
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(null);
@@ -490,6 +491,19 @@ export default function App() {
         : (next[0]?.id ?? null),
     );
   }, []);
+
+  const refreshAgentStatuses = useCallback(async () => {
+    if (refreshingAgents) return;
+    setRefreshingAgents(true);
+    setError(null);
+    try {
+      await refreshAgents();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRefreshingAgents(false);
+    }
+  }, [refreshAgents, refreshingAgents]);
 
   const refreshMessages = useCallback(async (agentId: string) => {
     const result = await api.messages(agentId);
@@ -892,7 +906,20 @@ export default function App() {
 
         <div className="sidebar-label">
           <span>Your Agents</span>
-          <span>{agents.length}</span>
+          <div className="agent-list-tools">
+            <span>{agents.length}</span>
+            <button
+              type="button"
+              className={"icon-button agent-refresh-button " + (refreshingAgents ? "is-refreshing" : "")}
+              onClick={() => void refreshAgentStatuses()}
+              disabled={refreshingAgents}
+              aria-label={refreshingAgents ? "Refreshing Agent statuses" : "Refresh Agent statuses"}
+              aria-busy={refreshingAgents}
+              title={refreshingAgents ? "Refreshing Agent statuses" : "Refresh Agent statuses"}
+            >
+              <span aria-hidden="true">↻</span>
+            </button>
+          </div>
         </div>
         <nav className="agent-list">
           {agents.map((agent) => (
