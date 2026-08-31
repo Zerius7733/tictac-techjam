@@ -169,6 +169,13 @@ The development policy seed includes readable, human-named artifacts:
 
 - **Backend API contract** (`data_asset:backend-api-contract`) — Bob's shared
   backend contract.
+- **Shared order database** (`data_asset:database`) — a read-only query
+  surface over sanitized order fields. Use `orders.list` for rows or
+  `orders.summary` for aggregate dashboard metrics; arbitrary SQL is denied.
+- **Shared users database table** (`data_asset:database:users`) — a read-only
+  projection of the real SQLite `users` table. Use `users.list` for rows or
+  `users.summary` for counts; password hashes, sessions, and arbitrary tables
+  are never returned.
 - **Frontend design system** (`data_asset:frontend-design-system`) — Alice's
   shared UI tokens and components.
 - **Approved order schema** (`data_asset:order-schema`) — sanitized order

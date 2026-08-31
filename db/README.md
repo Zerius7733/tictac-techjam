@@ -28,7 +28,9 @@ The development seed creates:
 
 - `alice` with the `developer` role;
 - `bob` with the `developer` role; and
-- Alice's and Bob's private mock notes, shared project resources, and the
+- Alice's and Bob's private mock notes, shared project resources (including
+  the read-only `data_asset:database` order query surface and
+  `data_asset:database:users` sanitized users projection), and the
   seeded **Order Dashboard** project owned by Alice. Bob must accept Alice's
   invitation before he becomes a project collaborator or exposes his Agent to
   that project.

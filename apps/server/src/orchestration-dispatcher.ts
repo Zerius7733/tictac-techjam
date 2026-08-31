@@ -514,6 +514,7 @@ export class OrchestrationDispatcher {
           resourceType: command.resourceType,
           resourceKey: command.resourceKey,
           purpose: command.purpose,
+          ...(command.query === undefined ? {} : { query: command.query }),
         });
         const content = sanitizeResourceContent(provided.content);
         const envelope = agentResumeEnvelopeSchema.parse({
@@ -612,12 +613,24 @@ export class OrchestrationDispatcher {
   ) {
     let reasonCode: string | null = null;
     if (!target) reasonCode = "agent_not_found";
-    else if (target.status !== "ready") reasonCode = "agent_unavailable";
-    else if (target.id === run.agentId || ancestry.has(target.id)) {
+    // Resource providers do not create or run a target Agent child. A target
+    // may therefore be busy with its own turn while its capability is used
+    // for a protected read. Availability is only a prerequisite for actual
+    // Agent delegation.
+    else if (command.type === "delegate" && target.status !== "ready") {
+      reasonCode = "agent_unavailable";
+    }
+    else if (
+      command.type === "delegate" &&
+      (target.id === run.agentId || ancestry.has(target.id))
+    ) {
       reasonCode = "delegation_cycle";
-    } else if (depth >= this.maxDepth) {
+    } else if (command.type === "delegate" && depth >= this.maxDepth) {
       reasonCode = "delegation_depth_exceeded";
-    } else if (this.repository.listRuns(run.jobId).length >= this.maxRuns) {
+    } else if (
+      command.type === "delegate" &&
+      this.repository.listRuns(run.jobId).length >= this.maxRuns
+    ) {
       reasonCode = "run_limit_exceeded";
     } else if (
       projectId &&
@@ -1030,7 +1043,8 @@ function structuredPrompt(
     "Return exactly one JSON object and no markdown.",
     'For a final response use {"type":"final","summary":"Short plain-language summary of what you did.","content":"Full result, including any structured data."}.',
     'To delegate use {"type":"delegate","targetAgentKey":"...","task":"..."}.',
-    'To request protected data use {"type":"resource_request","targetAgentKey":"...","action":"read","resourceType":"data_asset","resourceKey":"...","purpose":"..."}.',
+    'To request protected data use {"type":"resource_request","targetAgentKey":"...","action":"read","resourceType":"data_asset","resourceKey":"...","purpose":"...","query":"..."}. Omit query unless the resource documents one.',
+    "The shared order database resource (data_asset key database) accepts only these read-only queries: orders.list?status=<status>&limit=<1..50>&sort=created_at_asc|created_at_desc and orders.summary?status=<status>. The sanitized users table (data_asset key database:users) accepts only users.list?status=active|inactive|all&limit=<1..50>&sort=username_asc|username_desc|created_at_asc|created_at_desc and users.summary?status=active|inactive|all. Use the exact key for the requested table and never send SQL.",
     "Treat authorization denial messages as final policy; never retry a denied request with different wording.",
     "The summary is shown on the run card. Keep it human-readable, concise, and free of JSON or code; keep the complete result in content.",
     ...(collaborative
@@ -1053,7 +1067,8 @@ function recoveryPrompt(originalPrompt: string, reason: string): string {
     "Return exactly one valid JSON object and no markdown, prose, or code fences.",
     'For a final response use {"type":"final","summary":"Short plain-language summary of what you did.","content":"Full result, including any structured data."}.',
     'For delegation use {"type":"delegate","targetAgentKey":"...","task":"..."}.',
-    'For protected data use {"type":"resource_request","targetAgentKey":"...","action":"read","resourceType":"data_asset","resourceKey":"...","purpose":"..."}.',
+    'For protected data use {"type":"resource_request","targetAgentKey":"...","action":"read","resourceType":"data_asset","resourceKey":"...","purpose":"...","query":"..."}. Omit query unless the resource documents one.',
+    "The shared database resources accept only the documented read-only orders.list/orders.summary query for key database or users.list/users.summary query for key database:users. Use the exact key for the requested table and never send SQL.",
     "When a shared-project response schema is present, set fields that do not apply to null and keep final.content as a JSON string.",
     "Original task:",
     originalPrompt,
@@ -1076,7 +1091,10 @@ function finalContentText(content: unknown): string {
 
 function safeResourceReason(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
-  return message === "resource_not_allowlisted" || message === "resource_not_available"
+  return message === "resource_not_allowlisted" ||
+    message === "resource_not_available" ||
+    message === "database_query_required" ||
+    message === "database_query_not_allowlisted"
     ? message
     : "resource_provider_failed";
 }

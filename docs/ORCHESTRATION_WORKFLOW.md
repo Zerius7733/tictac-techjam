@@ -26,7 +26,7 @@ Related documents:
 | `OrchestrationDispatcher` | Runs the state machine, validates Agent commands, authorizes child/resource work, and resumes parents. |
 | `OrchestrationRepository` | Atomically persists jobs, runs, messages, threads, usage, and terminal state. |
 | `AgentRunner` | Executes one Agent turn in its workspace and returns output, usage, and a Codex thread ID. |
-| Protected resource provider | Future allowlisted adapter for sanitized data such as `order-schema`; it is never raw database/filesystem access. |
+| Protected resource provider | Allowlisted adapter for sanitized assets such as `order-schema` and the read-only `database` query surface; it never accepts raw SQL or filesystem access. |
 
 The current dispatcher is wired to fake authorization, Agent directory, and
 runner implementations in tests. Real API dispatch, provider adapters, and
@@ -237,9 +237,35 @@ or data release:
   sanitize the returned artifact, persist the result, and resume the requester.
 
 The current dispatcher models an allowed resource request as a child Agent
-invocation. The dedicated provider adapter, resource vocabulary, and real
-authorization integration remain pending work; raw database/filesystem access
-must never be exposed to an Agent.
+invocation. The local provider supports the exact `data_asset` vocabulary,
+including shared `database` and `database:users` resources. Database requests
+use allowlisted query DSLs (`orders.list`/`orders.summary` or
+`users.list`/`users.summary`) and are sanitized before the result is returned;
+raw SQL, arbitrary table names, and filesystem access must never be exposed to
+an Agent. Production authorization still owns the final capability decision.
+
+### Shared database resource
+
+The development catalog includes two shared read-only database resources:
+`data_asset:database` for order data and `data_asset:database:users` for the
+sanitized users projection. Agents must include one of these exact query values
+for the resource they request:
+
+```text
+orders.list?status=pending&limit=10&sort=created_at_desc
+orders.summary?status=fulfilled
+users.list?status=active&limit=25&sort=username_asc
+users.summary?status=all
+```
+
+Only the documented `status`, `limit`, and `sort` parameters are accepted. The
+provider returns sanitized order fields or the fixed users projection and
+never exposes customer records, private notes, password hashes, sessions,
+credentials, secrets, or arbitrary SQL results. A capability for either
+`read / data_asset / database` or `read / data_asset / database:users` must be
+granted to the target Agent before the provider is called. The users resource
+reads the server-owned SQLite file; Agents never receive the database path or a
+database connection.
 
 ## 7. Parent resumption
 
@@ -452,7 +478,7 @@ persisted child result; that worker is not implemented yet.
 | Concrete `AuthStore` adapter for the shared async `Authorizer` seam | Pending authorization integration. |
 | Agent-principal capability rules and resource vocabulary | Requires agreement with the authorization contributor. |
 | `audit_agent_context` persistence and audit links | Pending repository and authorizer integration. |
-| Allowlisted protected-resource provider and sanitization | Pending Milestone 6. |
+| Allowlisted protected-resource provider and sanitization | Implemented for the local POC, including the shared order and SQLite-backed `database:users` read-only query DSLs; production provider/auth adapter remains partner integration work. |
 | Archive/history preservation, cancellation, timeout, restart reconciliation, and lifecycle logs | Implemented in the repository/dispatcher; public API and durable waiting-run worker remain pending. |
 | Full Alice/Bob demo with real auth, API, runner, and provider | Pending Milestone 9. |
 

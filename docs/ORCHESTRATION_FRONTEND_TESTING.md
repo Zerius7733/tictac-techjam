@@ -664,6 +664,43 @@ Expected timeline entries include `delegation`, Bob's result, and Alice's
 final `result`. The parent run must resume its own run-level thread; it must
 not reuse Bob's thread.
 
+### Optional shared database query test
+
+The development catalog also includes the shared `data_asset:database`.
+Grant the exact `read / data_asset / database` capability to the Agent that
+will query it, then use a request like:
+
+```text
+Read the shared database using the exact query
+orders.list?status=pending&limit=10&sort=created_at_desc. Return only the
+sanitized order fields needed for the dashboard. Do not use SQL and do not
+request customer records, private notes, or secrets.
+```
+
+The provider accepts only `orders.list` and `orders.summary` queries. It
+rejects arbitrary SQL, unknown query parameters, and requests without a query.
+The result should contain `tool_call` and `tool_result` events while keeping
+customer-identifying and private fields out of the response.
+
+### Optional current-users table test
+
+The development catalog also includes `data_asset:database:users`. Grant
+`read / data_asset / database:users` to the Agent that will perform the query,
+then use this prompt:
+
+```text
+Read the current users table with the exact query
+users.list?status=active&limit=25&sort=username_asc. Return only the approved
+user fields needed for a dashboard. Do not request password hashes, sessions,
+credentials, private notes, or any other table.
+```
+
+The provider reads the server-owned SQLite database through a read-only
+adapter, but exposes only `id`, `username`, `email`, `display_name`,
+`is_active`, `created_at`, and `updated_at`. It accepts only `users.list` and
+`users.summary`; raw SQL, unknown parameters, arbitrary tables, and missing
+queries are denied.
+
 ## 9. Run the denied customer-records test
 
 Submit a request that causes the root Agent to request the protected resource:

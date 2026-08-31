@@ -32,7 +32,9 @@ Volcengine ECS.
   and revocable Agent credentials
 - Shared projects with collaborator roles, explicit participating Agents, and
   project-scoped orchestration workspaces
-- Human-named mock protected resources for testing least-privilege delegation
+- Human-named protected resources, including bounded read-only shared order
+  queries and a SQLite-backed users-table projection, for testing
+  least-privilege delegation
 - Persistent Agent workspaces and Codex sessions
 - Disposable Docker, Colima, or Podman container for each local turn
 - Docker and Terraform deployment paths for Volcengine ECS

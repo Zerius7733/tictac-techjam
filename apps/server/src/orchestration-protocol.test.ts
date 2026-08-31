@@ -43,9 +43,13 @@ describe("structured Agent orchestration protocol", () => {
     ).toMatchObject({ type: "delegate", targetAgentKey: "bob-order-service" });
     expect(
       parseAgentCommand(
-        '{"type":"resource_request","targetAgentKey":"bob-order-service","action":"read","resourceType":"data_asset","resourceKey":"order-schema","purpose":"Build the dashboard"}',
+        '{"type":"resource_request","targetAgentKey":"bob-order-service","action":"read","resourceType":"data_asset","resourceKey":"database","purpose":"Build the dashboard","query":"orders.list?status=pending&limit=10"}',
       ),
-    ).toMatchObject({ type: "resource_request", resourceKey: "order-schema" });
+    ).toMatchObject({
+      type: "resource_request",
+      resourceKey: "database",
+      query: "orders.list?status=pending&limit=10",
+    });
   });
 
   it("accepts nullable placeholders emitted by the collaborative Runtime schema", () => {

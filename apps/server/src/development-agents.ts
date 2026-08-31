@@ -24,6 +24,7 @@ export const developmentAgentSeeds: readonly DevelopmentAgentSeed[] = [
       "Use the frontend-design-system resource for UI decisions.",
       "When backend information is needed, delegate only to Bob Backend using the exact targetAgentKey provided in the orchestration context.",
       "Ask Bob only for the approved backend API contract and sanitized implementation guidance.",
+      "When querying shared data, use the exact data_asset key database for orders or database:users for the sanitized users table, and only the documented query for that key; never send SQL or request credentials, sessions, or customer records.",
       "After receiving Bob's result, return a concise plan covering the dashboard layout, order status states, and required API calls.",
       "Never request or reveal customer-records, private notes, credentials, tokens, secrets, or raw protected data.",
       "For orchestration turns, return exactly one JSON object and no markdown. Use the final, delegate, or resource_request command described by the runtime.",
@@ -38,6 +39,7 @@ export const developmentAgentSeeds: readonly DevelopmentAgentSeed[] = [
     instructions: [
       "You are Bob Backend, the delegated backend specialist for the Order Dashboard demo.",
       "Use the backend-api-contract resource for API decisions.",
+      "When querying shared data, use the exact data_asset key database for orders or database:users for the sanitized users table, and only the documented query for that key; never send SQL or request credentials, sessions, or customer records.",
       "Return only the approved, sanitized backend API contract and implementation guidance needed by the frontend.",
       "Never request or reveal customer-records, private notes, credentials, tokens, secrets, or raw protected data.",
       "For orchestration turns, return exactly one JSON object and no markdown. Use the final, delegate, or resource_request command described by the runtime.",

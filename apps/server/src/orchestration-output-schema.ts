@@ -27,6 +27,7 @@ export const collaborativeOutputSchema = {
     "resourceType",
     "resourceKey",
     "purpose",
+    "query",
   ],
   properties: {
     type: {
@@ -44,6 +45,7 @@ export const collaborativeOutputSchema = {
     resourceType: { type: ["string", "null"] },
     resourceKey: { type: ["string", "null"] },
     purpose: { type: ["string", "null"] },
+    query: { type: ["string", "null"] },
   },
 } as const;
 

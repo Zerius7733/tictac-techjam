@@ -47,6 +47,11 @@ export const resourceRequestCommandSchema = z
     resourceType: boundedText(80),
     resourceKey: boundedText(160),
     purpose: boundedText(2_000),
+    /**
+     * Optional provider-specific query. The database resource accepts only
+     * its documented allowlisted query DSL; other resources must omit it.
+     */
+    query: boundedText(500).optional(),
   })
   .strict();
 
@@ -95,6 +100,7 @@ export function parseAgentCommand(output: string): AgentCommand {
       "resourceType",
       "resourceKey",
       "purpose",
+      "query",
     ]);
     value = Object.fromEntries(
       Object.entries(value).filter(

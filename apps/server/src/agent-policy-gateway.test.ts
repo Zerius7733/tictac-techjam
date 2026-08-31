@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AgentPolicyGateway } from "./agent-policy-gateway.js";
 import { AuthStore } from "./auth-store.js";
 import { PolicyStore } from "./policy-store.js";
+import { AllowlistedResourceProvider } from "./orchestration-resource-provider.js";
 import type { Agent } from "./types.js";
 
 const temporaryDirectories: string[] = [];
@@ -69,6 +70,8 @@ describe("AgentPolicyGateway", () => {
       expect.arrayContaining([
         "data_asset:order-schema",
         "data_asset:backend-api-contract",
+        "data_asset:database",
+        "data_asset:database:users",
         "data_asset:frontend-design-system",
         "data_asset:shared-project-status",
         "data_asset:customer-records",
@@ -156,6 +159,80 @@ describe("AgentPolicyGateway", () => {
       allowed: false,
       reasonCode: "permission_missing",
     });
+  });
+
+  it("applies the Agent capability before serving a shared database query", async () => {
+    const system = await makePolicySystem();
+    system.gateway.grantCapability(system.context, system.agent, {
+      action: "read",
+      resourceType: "data_asset",
+      resourceKey: "database",
+      expiresInSeconds: 3_600,
+    });
+    const provider = new AllowlistedResourceProvider(system.gateway);
+
+    const result = await provider.provide({
+      requestId: "request-database",
+      jobId: "job-database",
+      runId: "run-database",
+      agentId: system.agent.id,
+      action: "read",
+      resourceType: "data_asset",
+      resourceKey: "database",
+      query: "orders.summary?status=fulfilled",
+      purpose: "Build order dashboard metrics",
+      authContext: system.context,
+      agent: {
+        id: system.agent.id,
+        agentKey: system.agent.agentKey,
+        ownerUserId: system.agent.ownerUserId,
+        principalId: system.agent.principalId,
+        workspacePath: system.agent.workspacePath,
+        status: system.agent.status,
+      },
+    });
+
+    expect(JSON.parse(result.content)).toMatchObject({
+      resource: "database",
+      query: "orders.summary?status=fulfilled",
+      total_orders: 1,
+      total_value: 131.7,
+    });
+  });
+
+  it("denies a users-table query before the database reader is called", async () => {
+    const system = await makePolicySystem();
+    let readerCalled = false;
+    const provider = new AllowlistedResourceProvider(system.gateway, {
+      query: () => {
+        readerCalled = true;
+        return { content: "should not be returned" };
+      },
+    });
+
+    await expect(
+      provider.provide({
+        requestId: "request-users-denied",
+        jobId: "job-users-denied",
+        runId: "run-users-denied",
+        agentId: system.agent.id,
+        action: "read",
+        resourceType: "data_asset",
+        resourceKey: "database:users",
+        query: "users.list?status=active&limit=10",
+        purpose: "Try to read users without a capability",
+        authContext: system.context,
+        agent: {
+          id: system.agent.id,
+          agentKey: system.agent.agentKey,
+          ownerUserId: system.agent.ownerUserId,
+          principalId: system.agent.principalId,
+          workspacePath: system.agent.workspacePath,
+          status: system.agent.status,
+        },
+      }),
+    ).rejects.toThrow("resource_not_available");
+    expect(readerCalled).toBe(false);
   });
 
   it("blocks cross-user private resources even when a grant is attempted", async () => {

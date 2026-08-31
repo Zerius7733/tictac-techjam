@@ -326,6 +326,116 @@ describe("OrchestrationDispatcher", () => {
     )).toBe(false);
   });
 
+  it("allows a protected read while the capability-owning Agent is busy", async () => {
+    const repository = new InMemoryOrchestrationRepository();
+    const busyBob = { ...bob, status: "busy" as const };
+    const runner = new ScriptedAgentRunner([
+      {
+        output:
+          '{"type":"resource_request","targetAgentKey":"bob-order-service","action":"read","resourceType":"data_asset","resourceKey":"database","query":"orders.summary","purpose":"Build dashboard metrics"}',
+        threadId: "alice-thread-1",
+        usage: null,
+      },
+      {
+        output: '{"type":"final","content":"Summary received."}',
+        threadId: "alice-thread-2",
+        usage: null,
+      },
+    ]);
+    let providerCalls = 0;
+    const dispatcher = new OrchestrationDispatcher(
+      repository,
+      new TestAgentDirectory([alice, busyBob]),
+      new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-busy-resource",
+      })),
+      runner,
+      {
+        resourceProvider: {
+          async provide(request) {
+            providerCalls += 1;
+            expect(request.resourceKey).toBe("database");
+            expect(request.query).toBe("orders.summary");
+            return { content: '{"resource":"database","total_orders":4}' };
+          },
+        },
+      },
+    );
+    const root = await repository.createRootJob({
+      requestId: "request-busy-resource",
+      userId: context.userId,
+      inputText: "Build dashboard metrics",
+      agentId: alice.id,
+      prompt: "Build dashboard metrics",
+    });
+
+    await expect(
+      dispatcher.dispatchRoot({
+        jobId: root.job.id,
+        rootRunId: root.run.id,
+        authContext: context,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(providerCalls).toBe(1);
+    expect(repository.listRuns(root.job.id)).toHaveLength(1);
+  });
+
+  it("allows an Agent to query a resource through its own principal", async () => {
+    const repository = new InMemoryOrchestrationRepository();
+    const runner = new ScriptedAgentRunner([
+      {
+        output:
+          '{"type":"resource_request","targetAgentKey":"alice-frontend","action":"read","resourceType":"data_asset","resourceKey":"database","query":"orders.summary","purpose":"Build dashboard metrics"}',
+        threadId: "alice-thread-1",
+        usage: null,
+      },
+      {
+        output: '{"type":"final","content":"Summary received."}',
+        threadId: "alice-thread-2",
+        usage: null,
+      },
+    ]);
+    let providerCalls = 0;
+    const dispatcher = new OrchestrationDispatcher(
+      repository,
+      new TestAgentDirectory([alice, bob]),
+      new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-own-resource",
+      })),
+      runner,
+      {
+        resourceProvider: {
+          async provide(request) {
+            providerCalls += 1;
+            expect(request.agentId).toBe(alice.id);
+            expect(request.query).toBe("orders.summary");
+            return { content: '{"resource":"database","total_orders":4}' };
+          },
+        },
+      },
+    );
+    const root = await repository.createRootJob({
+      requestId: "request-own-resource",
+      userId: context.userId,
+      inputText: "Build dashboard metrics",
+      agentId: alice.id,
+      prompt: "Build dashboard metrics",
+    });
+
+    await expect(
+      dispatcher.dispatchRoot({
+        jobId: root.job.id,
+        rootRunId: root.run.id,
+        authContext: context,
+      }),
+    ).resolves.toMatchObject({ status: "completed" });
+    expect(providerCalls).toBe(1);
+  });
+
   it("repairs one invalid Agent response before completing the run", async () => {
     const repository = new InMemoryOrchestrationRepository();
     const runner = new ScriptedAgentRunner([

@@ -11,7 +11,10 @@ import {
   AgentStoreDirectory,
   OrchestrationDispatcher,
 } from "./orchestration-dispatcher.js";
-import { AllowlistedResourceProvider } from "./orchestration-resource-provider.js";
+import {
+  AllowlistedResourceProvider,
+  SqliteSharedDatabaseReader,
+} from "./orchestration-resource-provider.js";
 import { SqliteOrchestrationRepository } from "./orchestration-sqlite-repository.js";
 import { importLegacyAgentData, SqliteAgentStore } from "./sqlite-agent-store.js";
 import { JsonStore } from "./store.js";
@@ -48,13 +51,14 @@ const agentDirectory = new AgentStoreDirectory(store);
 const authorizer = new AuthStoreAuthorizer(authStore);
 const projectStore = new ProjectStore(config.authDatabasePath, config.workspaceRoot);
 await projectStore.initialize(config.seedDevelopmentData);
+const sharedDatabaseReader = new SqliteSharedDatabaseReader(config.authDatabasePath);
 const dispatcher = new OrchestrationDispatcher(
   orchestrationRepository,
   agentDirectory,
   authorizer,
   runner,
   {
-    resourceProvider: new AllowlistedResourceProvider(policyGateway),
+    resourceProvider: new AllowlistedResourceProvider(policyGateway, sharedDatabaseReader),
     projectAccess: projectStore,
     collaborativeOutputSchemaPath,
   },
@@ -81,6 +85,7 @@ const shutdown = async (signal: string) => {
     store.close();
     orchestrationRepository.close();
     projectStore.close();
+    sharedDatabaseReader.close();
     policyStore.close();
     authStore.close();
   }

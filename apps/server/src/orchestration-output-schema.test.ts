@@ -23,6 +23,7 @@ describe("collaborative Runtime output schema", () => {
       "resourceType",
       "resourceKey",
       "purpose",
+      "query",
     ]);
     expect(properties.type).toEqual({
       type: "string",

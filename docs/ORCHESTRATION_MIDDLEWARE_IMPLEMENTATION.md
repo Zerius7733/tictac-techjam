@@ -58,6 +58,10 @@ session, or permission implementation:
   `order-schema` and `customer-records`.
 - [x] Add protected-data intent parsing and a frontend selector for granting
   and revoking exact Agent/resource capabilities.
+- [x] Add the shared `data_asset:database` resource with a bounded, read-only
+  `orders.list`/`orders.summary` query DSL and sanitized order results.
+- [x] Add the real SQLite-backed `data_asset:database:users` resource with a
+  fixed users projection and bounded `users.list`/`users.summary` queries.
 - [x] Make local POC startup idempotently provision the default development
   resource catalog and collaboration project through an explicit seed flag;
   keep production seeding disabled unless explicitly enabled.
@@ -541,3 +545,5 @@ These remain mandatory throughout all milestones:
 | 2026-08-31 | Local POC startup seed (complete) | Added `SEED_DEVELOPMENT_DATA`, wired it through the server composition root, and made `npm run poc` enable it by default while retaining production-style Runtime settings. Existing resources, capabilities, Agents, and project data are preserved by the existing `INSERT OR IGNORE` seeds; production remains opt-out by default. | Server typecheck passed; server suite passed 96/96; config tests cover development, production, explicit POC seeding, and empty-database modes. |
 | 2026-08-31 | Local demo Agents (complete) | Added deterministic **Alice Frontend** and **Bob Backend** Agent metadata, default Order Dashboard instructions, principals, and non-destructive workspace initialization. The seed runs whenever development data seeding is enabled, never overwrites active or archived records, and allows an archived name-only record to coexist with a fresh default. Credentials, capabilities, project membership, and project assignments remain explicit security steps. | Targeted Agent/config/SQLite suite: 24 tests passed; full server suite: 100 tests passed; server typecheck passed. |
 | 2026-08-31 | Runtime schema compatibility (complete) | Replaced the provider-rejected root-level `oneOf` response schema with a single strict object containing nullable command fields. The Zod protocol parser still enforces the `final`/`delegate`/`resource_request` semantics after removing null placeholders. | Protocol and schema tests: 8 passed; full server suite: 103 passed; server typecheck passed. |
+| 2026-08-31 | Shared database resource (complete) | Added the shared `data_asset:database` catalog entry and developer read permission, documented exact order query commands, and extended the allowlisted provider/protocol to return sanitized order rows or summaries without accepting arbitrary SQL. | Server suite: 109 tests passed; server typecheck passed. Agent capabilities remain explicit and must be granted through Security & Policy. |
+| 2026-08-31 | SQLite users resource (complete) | Added `data_asset:database:users`, the server-owned read-only SQLite adapter, sanitized user projection, bounded `users.list`/`users.summary` queries, developer permission, and policy/provider tests. | Server suite: 112 tests passed; server/web typechecks passed. Password hashes, sessions, policy rows, and arbitrary SQL remain inaccessible. |

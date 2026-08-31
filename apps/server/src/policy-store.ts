@@ -418,6 +418,14 @@ function resourceMetadata(resourceType: string, resourceKey: string): {
       label: "Backend API contract",
       description: "Approved endpoints and response fields for the order service.",
     },
+    database: {
+      label: "Shared order database",
+      description: "Read-only order queries with no customer-identifying fields.",
+    },
+    "database:users": {
+      label: "Shared users database table",
+      description: "Read-only sanitized projection of the users table.",
+    },
     "frontend-design-system": {
       label: "Frontend design system",
       description: "Shared UI tokens and components for the project.",

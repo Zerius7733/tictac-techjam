@@ -137,6 +137,9 @@ Permissions are stored as separate `action`, `resource_type`, and
 | `view` | `agent` | stable `agents.agent_key` | View Agent metadata |
 | `view` | `run` | run UUID | Inspect a run where the API exposes it |
 | `read` | `data_asset` | `order-schema` | Approved sanitized order API contract |
+| `read` | `data_asset` | `backend-api-contract` | Approved backend endpoints and response fields |
+| `read` | `data_asset` | `database` | Shared read-only order queries (`orders.list`/`orders.summary`) |
+| `read` | `data_asset` | `database:users` | Fixed, sanitized projection of the SQLite `users` table (`users.list`/`users.summary`) |
 | `read` | `data_asset` | `customer-records` | Protected customer data; denied in the demo |
 
 Rules:
@@ -144,6 +147,12 @@ Rules:
 - Use the stable `agent_key`, never a display name, for Agent permissions.
 - `data_asset` is a protected resource family, not an Agent or filesystem
   resource. It must be authorized before provider lookup.
+- `database` is a queryable sanitized data asset, not unrestricted SQLite
+  access. The provider accepts only the documented order query DSL and never
+  accepts raw SQL or arbitrary table names.
+- `database:users` is a read-only, server-owned projection. Only the approved
+  user columns are returned; password hashes, sessions, credentials, policy
+  rows, and other tables are never exposed.
 - `customer-records` must not be treated as an alias for `order-schema`.
 - Keep the existing exact-to-wildcard precedence and explicit deny behavior
   documented in the canonical schema.
@@ -159,6 +168,8 @@ Alice human:  create/orchestration/*
                invoke/agent/alice-frontend
                invoke/agent/bob-order-service
                read/data_asset/order-schema
+               read/data_asset/database (only when the demo queries orders)
+               read/data_asset/database:users (only when the demo builds a users dashboard)
                (no read/data_asset/customer-records)
 ```
 
@@ -298,6 +309,12 @@ The shared demo is complete when all of the following are true:
 - [ ] Alice is allowed to create an orchestration and invoke the selected
   Agents according to the agreed policy.
 - [ ] Bob's approved response for `read/data_asset/order-schema` is allowed.
+- [ ] An allowed `read/data_asset/database` request returns only sanitized
+  order rows or aggregates for an allowlisted query.
+- [ ] An allowed `read/data_asset/database:users` request returns only the
+  approved users projection for an allowlisted `users.list`/`users.summary`
+  query; password hashes, sessions, and other tables are absent.
+- [ ] An arbitrary SQL or unknown database query is denied before data access.
 - [ ] Alice's `read/data_asset/customer-records` request returns a stable deny
   reason before any provider lookup or Bob child run for that request.
 - [ ] The deny is recorded in `audit_logs` and linked to the relevant Agent/run
