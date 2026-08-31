@@ -35,7 +35,11 @@ function messageTitle(message: OrchestrationMessage, names: Map<string, string>)
   return "You";
 }
 
-function payloadString(payload: Record<string, unknown>, key: string): string | null {
+function payloadString(
+  payload: Record<string, unknown> | null | undefined,
+  key: string,
+): string | null {
+  if (!payload || typeof payload !== "object") return null;
   const value = payload[key];
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -81,8 +85,9 @@ function rawRunOutput(run: OrchestrationRun): string {
 }
 
 function rawMessageOutput(message: OrchestrationMessage): string {
-  return Object.keys(message.payload).length > 0
-    ? JSON.stringify(message.payload, null, 2)
+  const payload = message.payload;
+  return payload && Object.keys(payload).length > 0
+    ? JSON.stringify(payload, null, 2)
     : message.content;
 }
 

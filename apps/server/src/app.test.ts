@@ -170,7 +170,12 @@ describe("HTTP boundary", () => {
       payload: { agentId: agent.id, prompt: "Build it" },
     });
     expect(created.statusCode).toBe(202);
-    const createdBody = created.json() as { job: { id: string }; run: { id: string } };
+    const createdBody = created.json() as {
+      job: { id: string };
+      run: { id: string };
+      message: { payload: Record<string, unknown> };
+    };
+    expect(createdBody.message.payload).toEqual({});
 
     await expect.poll(() => repository.getJob(createdBody.job.id)?.status).toBe("completed");
     const state = await app.inject({
@@ -178,7 +183,17 @@ describe("HTTP boundary", () => {
       url: "/api/orchestrations/" + createdBody.job.id,
     });
     expect(state.statusCode).toBe(200);
-    expect(state.json()).toMatchObject({ job: { status: "completed" }, runs: [{ id: createdBody.run.id, status: "completed" }] });
+    expect(state.json()).toMatchObject({
+      job: { status: "completed" },
+      runs: [
+        {
+          id: createdBody.run.id,
+          status: "completed",
+          outputJson: { type: "final", content: "API complete" },
+          codexThreadId: "thread-api",
+        },
+      ],
+    });
 
     const timeline = await app.inject({
       method: "GET",
@@ -186,6 +201,10 @@ describe("HTTP boundary", () => {
     });
     expect(timeline.statusCode).toBe(200);
     expect(timeline.json().messages).toHaveLength(2);
+    expect(timeline.json().messages[1]).toMatchObject({
+      messageType: "result",
+      payload: { type: "final", content: "API complete" },
+    });
 
     const cancellableRepository = new InMemoryOrchestrationRepository();
     let releasePending!: (result: { output: string; threadId: string; usage: null }) => void;

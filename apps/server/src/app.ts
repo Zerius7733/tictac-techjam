@@ -196,8 +196,11 @@ function publicRun(run: OrchestrationRun) {
     parentRunId: run.parentRunId,
     attempt: run.attempt,
     status: run.status,
+    prompt: run.prompt,
     outputText: run.outputText,
+    outputJson: run.outputJson,
     errorText: run.errorText,
+    codexThreadId: run.codexThreadId,
     createdAt: run.createdAt,
     startedAt: run.startedAt,
     completedAt: run.completedAt,
@@ -217,6 +220,7 @@ function publicMessage(message: OrchestrationMessage) {
     recipientKey: message.recipientKey,
     messageType: message.messageType,
     content: message.content,
+    payload: message.payload,
     createdAt: message.createdAt,
   };
 }
