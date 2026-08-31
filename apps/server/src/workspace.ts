@@ -35,6 +35,26 @@ export class WorkspaceManager {
     );
   }
 
+  /** Ensure a seeded Agent has a usable workspace without overwriting files. */
+  async ensure(agent: Agent): Promise<void> {
+    await mkdir(agent.workspacePath, { recursive: true });
+    await this.writeInstructions(agent);
+    await writeIfMissing(
+      path.join(agent.workspacePath, ".gitignore"),
+      [".codex/", "node_modules/", "dist/", ".env", "*.log", ""].join("\n"),
+    );
+    await writeIfMissing(
+      path.join(agent.workspacePath, "README.md"),
+      [
+        "# " + agent.name + " workspace",
+        "",
+        "Files created or edited by the Agent live here.",
+        "The platform-generated AGENTS.md contains the current Agent instructions.",
+        "",
+      ].join("\n"),
+    );
+  }
+
   async writeInstructions(agent: Agent): Promise<void> {
     const content = [
       "# Platform-managed Agent instructions",
@@ -71,5 +91,13 @@ export class WorkspaceManager {
     );
     await rename(agent.workspacePath, destination);
     return destination;
+  }
+}
+
+async function writeIfMissing(filePath: string, content: string): Promise<void> {
+  try {
+    await writeFile(filePath, content, { encoding: "utf8", flag: "wx" });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
   }
 }

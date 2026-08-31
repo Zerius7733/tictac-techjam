@@ -15,6 +15,7 @@ import type {
   UpdateAgentInput,
 } from "./types.js";
 import { WorkspaceManager } from "./workspace.js";
+import { developmentAgentSeeds } from "./development-agents.js";
 import {
   type ChatMode,
   type ProtectedResourceIntent,
@@ -86,6 +87,7 @@ export class AgentService {
   async initialize(): Promise<void> {
     await this.store.initialize();
     await this.workspaces.initialize();
+    await this.seedDevelopmentAgents();
     await this.ensureAgentPrincipals();
     await this.store.mutate((database) => {
       for (const run of database.runs) {
@@ -575,6 +577,73 @@ export class AgentService {
         const storedAgent = database.agents.find((item) => item.id === agent.id);
         if (storedAgent) storedAgent.principalId = principal.id;
       });
+    }
+  }
+
+  private async seedDevelopmentAgents(): Promise<void> {
+    if (!this.config.seedDevelopmentData || !this.authStore) return;
+
+    for (const seed of developmentAgentSeeds) {
+      const existing = this.store.snapshot().agents;
+      if (
+        existing.some(
+          (agent) =>
+            agent.id === seed.id ||
+            (agent.status !== "archived" &&
+              (agent.agentKey.toLocaleLowerCase() ===
+                seed.agentKey.toLocaleLowerCase() ||
+                agent.name.toLocaleLowerCase() === seed.name.toLocaleLowerCase())),
+        )
+      ) {
+        continue;
+      }
+      if (!this.authStore.hasActiveUser(seed.ownerUserId)) continue;
+
+      const timestamp = now();
+      const principal = this.authStore.createAgentPrincipal(
+        seed.id,
+        seed.ownerUserId,
+      );
+      const agent: Agent = {
+        id: seed.id,
+        agentKey: seed.agentKey,
+        ownerUserId: seed.ownerUserId,
+        principalId: principal.id,
+        name: seed.name,
+        description: seed.description,
+        instructions: seed.instructions,
+        status: "ready",
+        workspacePath: this.workspaces.workspacePath(seed.id),
+        codexThreadId: null,
+        lastError: null,
+        createdAt: timestamp,
+        updatedAt: timestamp,
+      };
+
+      let inserted = false;
+      try {
+        await this.store.mutate(async (database) => {
+          if (
+            database.agents.some(
+              (item) =>
+                item.id === seed.id ||
+                (item.status !== "archived" &&
+                  (item.agentKey.toLocaleLowerCase() ===
+                    seed.agentKey.toLocaleLowerCase() ||
+                    item.name.toLocaleLowerCase() === seed.name.toLocaleLowerCase())),
+            )
+          ) {
+            return;
+          }
+          await this.workspaces.ensure(agent);
+          database.agents.push(agent);
+          inserted = true;
+        });
+      } catch (error) {
+        this.authStore.revokeAgentPrincipal(seed.id);
+        throw error;
+      }
+      if (!inserted) this.authStore.revokeAgentPrincipal(seed.id);
     }
   }
 

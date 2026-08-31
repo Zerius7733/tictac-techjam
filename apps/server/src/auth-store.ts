@@ -189,6 +189,13 @@ export class AuthStore {
     this.database = null;
   }
 
+  hasActiveUser(userId: string): boolean {
+    const row = this.db()
+      .prepare("SELECT 1 AS present FROM users WHERE id = ? AND is_active = 1")
+      .get(userId) as { present?: number } | undefined;
+    return row?.present === 1;
+  }
+
   login(usernameInput: string, password: string, requestId: string): LoginResult | null {
     const username = usernameInput.trim();
     const row = this.db()

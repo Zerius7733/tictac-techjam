@@ -69,6 +69,51 @@ function makeConfig(root: string) {
 }
 
 describe("SqliteAgentStore", () => {
+  it("seeds the default demo Agents in the combined SQLite database", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "launchpad-sqlite-default-agents-"));
+    temporaryDirectories.push(root);
+    const databasePath = path.join(root, "data", "launchpad.db");
+    const authStore = new AuthStore(databasePath);
+    openAuthStores.add(authStore);
+    await authStore.initialize(true);
+
+    const config = loadConfig({
+      NODE_ENV: "test",
+      SEED_DEVELOPMENT_DATA: "true",
+      APP_DATA_DIR: path.join(root, "data"),
+      AGENT_WORKSPACE_ROOT: path.join(root, "workspaces"),
+      CODEX_HOME: path.join(root, "codex"),
+      ARK_API_KEY: "test-key",
+      ARK_MODEL: "ep-test",
+    });
+    const store = new SqliteAgentStore(databasePath);
+    openStores.add(store);
+    const service = new AgentService(
+      config,
+      store,
+      new WorkspaceManager(config.workspaceRoot),
+      new FakeRunner(),
+      authStore,
+    );
+    await service.initialize();
+
+    const alice = store.getAgentByKey("alice-frontend");
+    const bob = store.getAgentByKey("bob-backend");
+    expect(alice).toMatchObject({
+      name: "Alice Frontend",
+      ownerUserId: "22222222-2222-4222-8222-111111111111",
+      status: "ready",
+    });
+    expect(bob).toMatchObject({
+      name: "Bob Backend",
+      ownerUserId: "22222222-2222-4222-8222-222222222222",
+      status: "ready",
+    });
+    expect(
+      await readFile(path.join(config.workspaceRoot, alice!.id, "AGENTS.md"), "utf8"),
+    ).toContain("frontend-design-system");
+  });
+
   it("shares the combined database with AuthStore and preserves Agent principals", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "launchpad-sqlite-auth-"));
     temporaryDirectories.push(root);

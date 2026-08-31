@@ -69,7 +69,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env) {
   // mock data unless the operator explicitly requests it.
   const seedDevelopmentData =
     env.SEED_DEVELOPMENT_DATA === undefined
-      ? env.NODE_ENV !== "production"
+      ? env.NODE_ENV === "development"
       : env.SEED_DEVELOPMENT_DATA === "true";
   const loopbackHosts = new Set(["127.0.0.1", "::1", "localhost"]);
   if (env.NODE_ENV === "production" && !loopbackHosts.has(env.HOST)) {

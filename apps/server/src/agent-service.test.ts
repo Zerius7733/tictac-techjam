@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
@@ -63,6 +63,89 @@ async function makeService(runner: AgentRunner = new FakeRunner()): Promise<Agen
 }
 
 describe("Agent lifecycle", () => {
+  it("seeds the default Alice and Bob demo Agents when enabled", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "launchpad-default-agents-test-"));
+    temporaryDirectories.push(root);
+    const config = loadConfig({
+      NODE_ENV: "test",
+      SEED_DEVELOPMENT_DATA: "true",
+      APP_DATA_DIR: path.join(root, "data"),
+      AGENT_WORKSPACE_ROOT: path.join(root, "workspaces"),
+      CODEX_HOME: path.join(root, "codex"),
+      ARK_API_KEY: "test-key",
+      ARK_MODEL: "ep-test",
+    });
+    const authStore = new AuthStore(path.join(root, "data", "auth.db"));
+    await authStore.initialize(true);
+    const store = new JsonStore(path.join(root, "data", "db.json"));
+    await store.initialize();
+    await store.mutate((database) => {
+      database.agents.push({
+        id: "legacy-archived-alice",
+        agentKey: "legacy-archived-alice",
+        ownerUserId: "22222222-2222-4222-8222-111111111111",
+        principalId: null,
+        name: "Alice Frontend",
+        description: "Archived history from an earlier local run.",
+        instructions: "Do not overwrite this history.",
+        status: "archived",
+        workspacePath: path.join(root, "archived-alice"),
+        codexThreadId: null,
+        lastError: null,
+        createdAt: "2026-08-30T00:00:00.000Z",
+        updatedAt: "2026-08-30T00:00:00.000Z",
+      });
+    });
+    const service = new AgentService(
+      config,
+      store,
+      new WorkspaceManager(config.workspaceRoot),
+      new FakeRunner(),
+      authStore,
+    );
+    await service.initialize();
+
+    const agents = service.listAgents(undefined, true);
+    expect(agents.map((agent) => agent.agentKey)).toEqual(
+      expect.arrayContaining(["alice-frontend", "bob-backend"]),
+    );
+    expect(agents.find((agent) => agent.agentKey === "alice-frontend")?.instructions).toContain(
+      "frontend-design-system",
+    );
+    expect(agents.find((agent) => agent.agentKey === "bob-backend")?.instructions).toContain(
+      "backend-api-contract",
+    );
+    expect(authStore.getAgentPrincipal("99999999-9999-4999-8999-111111111111")).toMatchObject({
+      ownerUserId: "22222222-2222-4222-8222-111111111111",
+      status: "active",
+    });
+    expect(authStore.getAgentPrincipal("99999999-9999-4999-8999-222222222222")).toMatchObject({
+      ownerUserId: "22222222-2222-4222-8222-222222222222",
+      status: "active",
+    });
+    const alice = agents.find((agent) => agent.agentKey === "alice-frontend")!;
+    expect(await readFile(path.join(alice.workspacePath, "AGENTS.md"), "utf8")).toContain(
+      "Order Dashboard demo",
+    );
+
+    const customized = await service.updateAgent(
+      alice.id,
+      { instructions: "Keep the owner's custom demo instructions." },
+      "22222222-2222-4222-8222-111111111111",
+    );
+    await service.initialize();
+    expect(
+      service.getAgent(alice.id, "22222222-2222-4222-8222-111111111111").instructions,
+    ).toBe(customized.instructions);
+    expect(
+      service
+        .listAgents(undefined, true)
+        .filter((agent) => agent.agentKey.endsWith("frontend")),
+    ).toHaveLength(1);
+    expect(service.getAgent("legacy-archived-alice", undefined, true).status).toBe("archived");
+    authStore.close();
+  });
+
   it("creates a separate active principal for an authenticated Agent", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "launchpad-principal-test-"));
     temporaryDirectories.push(root);

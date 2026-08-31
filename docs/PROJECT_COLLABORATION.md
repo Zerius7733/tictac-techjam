@@ -21,6 +21,14 @@ Only accepted collaborators' Agents can be discovered or added to the project,
 and the Agent can only use the resources its owner has explicitly allowed for
 it.
 
+When `SEED_DEVELOPMENT_DATA=true` (the default for `npm run poc`), the server
+also creates **Alice Frontend** and **Bob Backend** with demo-specific
+instructions and workspaces. Existing Agents are never overwritten. The seed
+does not issue credentials, grant Agent capabilities, accept invitations, or
+assign Agents to the project; those steps remain explicit so the authorization
+boundary can be tested. If seeding is disabled, create equivalent Agents in the
+UI.
+
 ## Recommended Alice/Bob test
 
 Use one running server and one shared database. Two browser windows or browser
@@ -29,7 +37,8 @@ profiles are enough; each profile keeps its own human session cookie.
 1. Start the app with `npm run poc` (or `npm run dev`) and sign in as Alice.
 2. Open **Projects** and select the seeded **Order Dashboard** project. Alice
    is the only accepted member initially.
-3. In Alice's browser, create an Agent named **Alice Frontend** with
+3. In Alice's browser, select the seeded **Alice Frontend** Agent. If the
+   development seed is disabled, create an Agent named **Alice Frontend** with
    instructions such as:
 
    ```text
@@ -38,8 +47,9 @@ profiles are enough; each profile keeps its own human session cookie.
    Never request customer-records, private notes, or secrets.
    ```
 
-4. In a second browser profile, sign in as Bob and create **Bob Backend** with
-   instructions such as:
+4. In a second browser profile, sign in as Bob and select the seeded **Bob
+   Backend** Agent. If the development seed is disabled, create **Bob Backend**
+   with instructions such as:
 
    ```text
    You own the backend work. Use backend-api-contract for API decisions.

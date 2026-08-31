@@ -21,12 +21,27 @@ environment variables still take precedence over values in the file.
 
 The POC runs the control plane with production-style Runtime settings while
 setting `SEED_DEVELOPMENT_DATA=true` by default. On a fresh persistent state
-directory this creates the development accounts, the default protected
-resource catalog (including **Frontend design system** and **Backend API
-contract**), and the seeded **Order Dashboard** project. Seeding is
-idempotent: existing Agents, capabilities, resources, and project data are
-preserved. Set `SEED_DEVELOPMENT_DATA=false` before starting when an empty
-database is required.
+directory this creates the development accounts, the default **Alice Frontend**
+and **Bob Backend** Agents (including their Order Dashboard instructions and
+workspaces), the protected resource catalog (including **Frontend design system**
+and **Backend API contract**), and the seeded **Order Dashboard** project.
+Seeding is idempotent: existing Agents, instructions, credentials, capabilities,
+resources, and project data are preserved. Agent credentials, project
+membership/assignment, and resource capabilities are deliberately not issued
+automatically; each owner must complete those Security & Policy/project steps
+so the authorization boundary remains testable. Set
+`SEED_DEVELOPMENT_DATA=false` before starting when an empty database is
+required.
+
+The seeded Agent identities are deterministic:
+
+| Account | Agent | `agent_key` |
+| --- | --- | --- |
+| Alice | Alice Frontend | `alice-frontend` |
+| Bob | Bob Backend | `bob-backend` |
+
+The key identifies the Agent for server-side routing; it is not a credential
+and does not grant access by itself.
 
 Open <http://localhost:3000>. Press `Ctrl+C` to stop the server and remove this
 instance's remaining Runtime containers.

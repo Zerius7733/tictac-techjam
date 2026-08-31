@@ -86,13 +86,21 @@ control-plane processes against the same database for this test; separate
 processes can compete for Agent work, recovery, and workspace state.
 
 The local POC sets `SEED_DEVELOPMENT_DATA=true` automatically. On startup it
-creates any missing development accounts, protected resources (including
-**Frontend design system** and **Backend API contract**), and the seeded
-**Order Dashboard** project without replacing existing data. Set
+creates any missing development accounts, the **Alice Frontend** and **Bob
+Backend** demo Agents with their default instructions/workspaces, protected
+resources (including **Frontend design system** and **Backend API contract**),
+and the seeded **Order Dashboard** project without replacing existing data.
+Credentials, Agent capabilities, project invitations, and Agent assignments
+remain explicit setup steps. Set
 `SEED_DEVELOPMENT_DATA=false` before starting when an empty database is
 intentional.
 
-## 3. Create the Agents
+## 3. Create or use the Agents
+
+With the default seed enabled, use the existing **Alice Frontend** and **Bob
+Backend** records. Their instructions are already tailored to the Order
+Dashboard delegation prompt. The creation options below are only needed when
+the seed is disabled or when you want isolated custom Agents.
 
 ### Option A: UI smoke test (same owner)
 
@@ -101,15 +109,15 @@ cross-owner authorization configuration.
 
 1. Sign in as `alice`.
 2. Click **Create Agent**.
-3. Create an Agent named `Alice Frontend`.
-4. Create a second Agent named `Bob Order Service`.
+3. Create an Agent named `Alice Frontend Local`.
+4. Create a second Agent named `Bob Order Service Local`.
 5. Confirm both Agents show status **ready**.
 
 ### Option B: Alice/Bob identity test (separate owners)
 
-1. Sign in as Alice and create `Alice Frontend`.
+1. Sign in as Alice and create `Alice Frontend Local`.
 2. Log out.
-3. Sign in as Bob and create `Bob Order Service`.
+3. Sign in as Bob and create `Bob Order Service Local`.
 4. Confirm Bob's Agent is **ready**.
 
 In this mode, Alice should not see Bob's Agent in her personal Agent list
@@ -147,10 +155,15 @@ Password: alice-demo-2026
 
 Stay signed in as Alice for the entire test. Do not open a second account yet.
 
-### Step 3: create Alice's root Agent
+### Step 3: use Alice's seeded root Agent
+
+If startup seeding is enabled, select the existing `Alice Frontend` Agent. Its
+description, instructions, principal, and workspace are already provisioned.
+If you intentionally disabled seeding, create the Agent instead:
 
 1. Click **Create Agent**.
-2. Set the name to `Alice Frontend`.
+2. Set the name to `Alice Frontend Local` (or `Alice Frontend` when no seeded
+   record exists).
 3. Set the instructions to:
 
    ```text
@@ -165,8 +178,8 @@ Stay signed in as Alice for the entire test. Do not open a second account yet.
    and never expose secrets or credentials.
    ```
 
-4. Click **Create Agent**.
-5. Confirm `Alice Frontend` appears in the sidebar with status **ready**.
+4. Click **Create Agent** when using the manual path.
+5. Confirm the selected root Agent appears in the sidebar with status **ready**.
 
 ### Step 4: create Bob's worker Agent under the same Alice account
 
@@ -174,7 +187,7 @@ This is only a local smoke-test shortcut. It is not the separate-owner
 Alice/Bob identity test.
 
 1. Click **Create Agent** again.
-2. Set the name to `Bob Order Service`.
+2. Set the name to `Bob Order Service Local`.
 3. Set the instructions to:
 
    ```text
@@ -189,7 +202,7 @@ Alice/Bob identity test.
    ```
 
 4. Click **Create Agent**.
-5. Confirm `Bob Order Service` also shows status **ready**.
+5. Confirm `Bob Order Service Local` also shows status **ready**.
 
 Newly created Agents are normally ready immediately. If an Agent shows
 **stopped**, select it and click **Start** before continuing.
@@ -203,18 +216,21 @@ terminal in the repository root, run:
 sqlite3 data/auth.db \
   "SELECT name, agent_key, status
    FROM agents
-   WHERE name IN ('Alice Frontend', 'Bob Order Service');"
+   WHERE name IN ('Alice Frontend', 'Bob Backend', 'Bob Order Service Local');"
 ```
 
-Copy the `agent_key` for `Bob Order Service`. It will usually look like
-`legacy-<uuid>`, but always use the value returned by SQLite.
+Copy the `agent_key` for the Bob Agent you selected. The seeded Agent key is
+`bob-backend`; manually created Agents have generated keys. Always use the value
+returned by SQLite rather than guessing from the display name.
 
 ### Step 6: put Bob's real key in Alice's instructions
 
-1. Select `Alice Frontend` in the sidebar.
+1. Select the Alice root Agent in the sidebar.
 2. Click **Settings**.
-3. Replace the phrase `provided in the request` with the actual Bob key, for
-   example:
+3. The seeded instructions already tell Alice to use the exact key supplied in
+   the orchestration context. If you are using a custom Agent and the model
+   needs an explicit key, replace the phrase `provided in the request` with the
+   actual Bob key, for example:
 
    ```text
    When you need the order schema, delegate only to this targetAgentKey:
@@ -271,7 +287,7 @@ The expected run tree is:
 
 ```text
 Alice Frontend: running -> waiting -> running -> completed
-Bob Order Service: queued -> running -> completed
+Bob child:          queued -> running -> completed
 ```
 
 The timeline should show a delegation event, Bob's child result, and Alice's
@@ -349,7 +365,7 @@ browser starts one orchestration job. The server then:
 Bob's browser can remain open for observation, but it is not required for Bob's
 Agent to execute.
 
-### Profile B: create Bob's Agent
+### Profile B: use Bob's seeded Agent
 
 1. Start one server with `npm run poc` or `npm run dev`.
 2. In the second Chrome profile, open the application and sign in as:
@@ -358,7 +374,9 @@ Agent to execute.
    bob / bob-demo-2026
    ```
 
-3. Create `Bob Order Service` and add the Bob instructions from Section 4.
+3. Select the seeded `Bob Backend` Agent. If seeding is disabled, create a
+   custom `Bob Backend Local` Agent and add the Bob instructions from Section
+   4.
 4. Confirm the Agent status is **ready**.
 
 The seeded Bob account is a developer in the collaboration demo, so he can
@@ -374,7 +392,7 @@ From a terminal in the same repository, read the key from the shared database:
 sqlite3 data/auth.db \
   "SELECT name, id, agent_key, owner_user_id, status
    FROM agents
-   WHERE name = 'Bob Order Service';"
+   WHERE name = 'Bob Backend';"
 ```
 
 Copy the `agent_key` value. The display name and UUID are not interchangeable
@@ -388,7 +406,8 @@ with `agent_key`.
    alice / alice-demo-2026
    ```
 
-2. Create or select `Alice Frontend` and add the Alice instructions from
+2. Select the seeded `Alice Frontend` Agent. If seeding is disabled, create a
+   custom `Alice Frontend Local` Agent and add the Alice instructions from
    Section 4.
 3. Confirm that Alice's Agent is **ready**.
 4. Open **Security & Policy**, issue an Agent credential if required by the
@@ -448,7 +467,7 @@ The timeline should contain, in order, events similar to:
 ```text
 Alice Frontend       prompt
 Authorization gateway delegation
-Bob Order Service    prompt/result
+Bob Backend           prompt/result
 Authorization gateway tool_result or result
 Alice Frontend       result
 ```
@@ -483,7 +502,7 @@ than bypassed in the test.
 
 ### Optional Bob observation
 
-In Bob's profile, select `Bob Order Service` and inspect its normal Agent
+In Bob's profile, select `Bob Backend` (or your custom Bob Agent) and inspect its normal Agent
 history after Alice's job completes. The orchestration child run is primarily
 visible through Alice's job timeline and the shared database; the current Bob
 UI does not provide a live cross-user inbox for delegated jobs.
@@ -719,7 +738,7 @@ integration.
 
 ```text
 [ ] One server process starts successfully with the configured Runtime.
-[ ] Alice Frontend and Bob Order Service are ready.
+[ ] Alice Frontend and Bob Backend are ready.
 [ ] Bob's real agent_key is retrieved from SQLite.
 [ ] Basic final-response orchestration completes.
 [ ] A delegated child run appears and the Alice parent resumes.

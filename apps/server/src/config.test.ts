@@ -12,6 +12,10 @@ describe("startup demo-data seeding", () => {
     ).toBe(false);
   });
 
+  it("keeps seed data disabled for tests unless explicitly requested", () => {
+    expect(loadConfig({ NODE_ENV: "test" }).seedDevelopmentData).toBe(false);
+  });
+
   it("allows the local POC to seed while retaining production Runtime mode", () => {
     expect(
       loadConfig({

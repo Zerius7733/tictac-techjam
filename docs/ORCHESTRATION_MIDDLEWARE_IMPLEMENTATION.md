@@ -487,7 +487,8 @@ Acceptance checks:
 
 ## Milestone 9: Prove the Alice/Bob workflow end to end
 
-- [ ] Seed or create Alice's frontend Agent and Bob's order-service Agent.
+- [x] Provide an idempotent local seed for **Alice Frontend** and **Bob Backend**
+  with demo-specific instructions and workspaces; preserve existing Agent data.
 - [ ] Grant Alice access to `order-schema` but not `customer-records`.
 - [ ] Run the dashboard request through the public orchestration API.
 - [ ] Verify Bob returns only the approved, sanitized order contract.
@@ -538,3 +539,4 @@ These remain mandatory throughout all milestones:
 | 2026-08-30 | 2 / 6 (complete) | Added migration `011_data_asset_permissions.sql`, seeded the allowlisted `data_asset/order-schema` and private `data_asset/customer-records` resources, added protected intent parsing, enforced read-only data-asset access, and exposed exact resource/action selection in the Security UI. | Focused policy, HTTP, Agent-service, auth-store, and intent suites: 33 tests passed; workspace typecheck passed. The local catalog is sanitized; production provider wiring and dispatcher audit-link integration remain shared/partner work. |
 | 2026-08-30 | Integration branch | Merged `main` and `orchestration` on `orchestration-integration` without changing either source branch. Kept main’s direct capability/revocation policy, merged orchestration’s SQLite runtime, dispatcher, waiting/archive recovery, API/UI, and data-asset flow, and renumbered new forward migrations to 009–011. | Fresh-database and legacy-ledger upgrade smoke tests passed; server tests 80/80, workspace typecheck, and web/server build passed. Remaining shared work is the production authorization/audit-context handoff and the full Alice/Bob seeded demo. |
 | 2026-08-31 | Local POC startup seed (complete) | Added `SEED_DEVELOPMENT_DATA`, wired it through the server composition root, and made `npm run poc` enable it by default while retaining production-style Runtime settings. Existing resources, capabilities, Agents, and project data are preserved by the existing `INSERT OR IGNORE` seeds; production remains opt-out by default. | Server typecheck passed; server suite passed 96/96; config tests cover development, production, explicit POC seeding, and empty-database modes. |
+| 2026-08-31 | Local demo Agents (complete) | Added deterministic **Alice Frontend** and **Bob Backend** Agent metadata, default Order Dashboard instructions, principals, and non-destructive workspace initialization. The seed runs whenever development data seeding is enabled, never overwrites active or archived records, and allows an archived name-only record to coexist with a fresh default. Credentials, capabilities, project membership, and project assignments remain explicit security steps. | Targeted Agent/config/SQLite suite: 24 tests passed; full server suite: 100 tests passed; server typecheck passed. |
