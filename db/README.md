@@ -58,36 +58,32 @@ the Agent credential and the exact active capability.
 
 ## Combined local database
 
-When the orchestration schema is used in the same SQLite file, apply migrations
-in order through migration 014:
+For a new local database, the complete schema is available as one baseline
+script:
 
 ```sh
 mkdir -p data
-sqlite3 data/middleware.db < db/migrations/001_authentication.sql
-sqlite3 data/middleware.db < db/migrations/002_multi_agent_orchestration.sql
-sqlite3 data/middleware.db < db/migrations/003_agent_principals.sql
-sqlite3 data/middleware.db < db/migrations/004_agent_policy.sql
-sqlite3 data/middleware.db < db/migrations/005_agent_credentials.sql
-sqlite3 data/middleware.db < db/migrations/008_remove_unused_approval_authenticator.sql
-sqlite3 data/middleware.db < db/migrations/009_waiting_agent_runs.sql
-sqlite3 data/middleware.db < db/migrations/010_archived_agents.sql
-sqlite3 data/middleware.db < db/migrations/011_data_asset_permissions.sql
-sqlite3 data/middleware.db < db/migrations/012_project_collaboration.sql
-sqlite3 data/middleware.db < db/migrations/013_project_invitations.sql
-sqlite3 data/middleware.db < db/migrations/014_reconcile_seeded_project_invitation.sql
-sqlite3 data/middleware.db < db/seeds/development_auth.sql
-sqlite3 data/middleware.db < db/seeds/development_policy.sql
-sqlite3 data/middleware.db < db/seeds/development_projects.sql
+sqlite3 data/auth.db < db/migrations/000_local_database.sql
+```
+
+This creates the current schema through migration 015 without development
+rows. To load the deterministic demo users, protected resources, and Order
+Dashboard project, run the seeds afterward:
+
+```sh
+sqlite3 data/auth.db < db/seeds/development_auth.sql
+sqlite3 data/auth.db < db/seeds/development_policy.sql
+sqlite3 data/auth.db < db/seeds/development_projects.sql
 ```
 
 The orchestration migration references the auth-owned `users` and `audit_logs`
 tables. It must not create another identity table. Migration 012 adds the
 project, membership, selected-Agent, and project-job tables. Migration 013 adds
-pending project invitations, and migration 014 repairs an older local demo
-state where the seeded invitation had already been accepted. The running
-server applies them automatically;
-manual setups should apply them after migration 011 and then run
-`db/seeds/development_projects.sql`.
+pending project invitations, migration 014 repairs an older local demo state
+where the seeded invitation had already been accepted, and migration 015 adds
+the project orchestrator fields. The running server applies the incremental
+migrations automatically; use the baseline script only when creating a new
+local database from scratch.
 
 ## Ownership boundary
 
