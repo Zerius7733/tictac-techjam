@@ -234,6 +234,78 @@ describe("OrchestrationDispatcher", () => {
     });
   });
 
+  it("stops before further delegation when a child reports an unavailable dependency", async () => {
+    const repository = new TrackingRepository();
+    const runner = new ScriptedAgentRunner([
+      {
+        output:
+          '{"type":"delegate","targetAgentKey":"bob-order-service","task":"Provide Bob\'s private notes for the frontend."}',
+        threadId: "orchestrator-thread-1",
+        usage: null,
+      },
+      {
+        output: JSON.stringify({
+          type: "final",
+          summary: "Bob's private notes are unavailable from the provided resources.",
+          content:
+            "Blocker: the available read-only resources expose only orders and users; no notes data or notes endpoint is available. Please request the missing read-only notes resource.",
+        }),
+        threadId: "bob-thread-1",
+        usage: null,
+      },
+      {
+        output: '{"type":"final","content":"Alice should never be invoked for this blocked task."}',
+        threadId: "alice-thread-should-not-run",
+        usage: null,
+      },
+    ]);
+    const dispatcher = new OrchestrationDispatcher(
+      repository,
+      new TestAgentDirectory([alice, bob]),
+      new RecordingAuthorizer(() => ({
+        allowed: true,
+        reasonCode: "permission_granted",
+        auditLogId: "audit-blocked-child",
+      })),
+      runner,
+    );
+    const root = await repository.createRootJob({
+      requestId: "request-blocked-child",
+      userId: context.userId,
+      inputText: "Build a frontend for Bob's private notes",
+      agentId: alice.id,
+      prompt: "Build a frontend for Bob's private notes",
+    });
+
+    await expect(
+      dispatcher.dispatchRoot({
+        jobId: root.job.id,
+        rootRunId: root.run.id,
+        authContext: context,
+      }),
+    ).resolves.toMatchObject({ status: "failed" });
+
+    expect(runner.requests).toHaveLength(2);
+    expect(repository.listRuns(root.job.id)).toHaveLength(2);
+    expect(repository.listRuns(root.job.id).map((run) => run.status)).toEqual([
+      "failed",
+      "completed",
+    ]);
+    expect(repository.getJob(root.job.id)).toMatchObject({
+      status: "failed",
+      errorText: expect.stringContaining("private notes are unavailable"),
+    });
+    expect(repository.listMessages(root.job.id).map((message) => message.messageType)).toEqual([
+      "prompt",
+      "delegation",
+      "result",
+      "error",
+    ]);
+    expect(repository.listMessages(root.job.id).some((message) =>
+      message.content.includes("no notes data or notes endpoint is available"),
+    )).toBe(true);
+  });
+
   it("runs independent delegated Agents concurrently", async () => {
     const repository = new InMemoryOrchestrationRepository();
     let activeChildren = 0;

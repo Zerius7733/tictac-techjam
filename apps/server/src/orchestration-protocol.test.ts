@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AgentProtocolError,
   agentResumeEnvelopeSchema,
+  finalCommandIndicatesBlocker,
   parseAgentCommand,
 } from "./orchestration-protocol.js";
 
@@ -33,6 +34,33 @@ describe("structured Agent orchestration protocol", () => {
         },
       },
     });
+  });
+
+  it("recognizes an unavailable dependency in a valid final response", () => {
+    const command = parseAgentCommand(
+      JSON.stringify({
+        type: "final",
+        summary: "Bob's private notes are unavailable from the provided resources.",
+        content:
+          "Blocker: no notes data or notes endpoint is available. Please request the missing read-only resource.",
+      }),
+    );
+
+    expect(command.type).toBe("final");
+    if (command.type === "final") {
+      expect(finalCommandIndicatesBlocker(command)).toBe(true);
+    }
+  });
+
+  it("does not classify a normal completed result as a blocker", () => {
+    const command = parseAgentCommand(
+      '{"type":"final","summary":"Completed the dashboard.","content":"No further changes are needed."}',
+    );
+
+    expect(command.type).toBe("final");
+    if (command.type === "final") {
+      expect(finalCommandIndicatesBlocker(command)).toBe(false);
+    }
   });
 
   it("parses delegation and resource requests", () => {

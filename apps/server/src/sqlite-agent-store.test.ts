@@ -114,6 +114,64 @@ describe("SqliteAgentStore", () => {
     ).toContain("frontend-design-system");
   });
 
+  it("does not recreate a demo key already reserved by an archived Agent", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "launchpad-sqlite-archived-seed-"));
+    temporaryDirectories.push(root);
+    const databasePath = path.join(root, "data", "launchpad.db");
+    const authStore = new AuthStore(databasePath);
+    openAuthStores.add(authStore);
+    await authStore.initialize(true);
+
+    const config = loadConfig({
+      NODE_ENV: "test",
+      SEED_DEVELOPMENT_DATA: "true",
+      APP_DATA_DIR: path.join(root, "data"),
+      AGENT_WORKSPACE_ROOT: path.join(root, "workspaces"),
+      CODEX_HOME: path.join(root, "codex"),
+      ARK_API_KEY: "test-key",
+      ARK_MODEL: "ep-test",
+    });
+    const setupStore = new SqliteAgentStore(databasePath);
+    openStores.add(setupStore);
+    await setupStore.initialize();
+    await setupStore.mutate((database) => {
+      database.agents.push({
+        id: "archived-bob-history",
+        agentKey: "bob-backend",
+        ownerUserId: "22222222-2222-4222-8222-222222222222",
+        principalId: null,
+        name: "Bob Backend",
+        description: "Archived history from an earlier local run.",
+        instructions: "Do not overwrite this history.",
+        status: "archived",
+        workspacePath: path.join(root, "archived-bob"),
+        codexThreadId: null,
+        lastError: null,
+        createdAt: "2026-08-30T00:00:00.000Z",
+        updatedAt: "2026-08-30T00:00:00.000Z",
+      });
+    });
+    setupStore.close();
+
+    const store = new SqliteAgentStore(databasePath);
+    openStores.add(store);
+    const service = new AgentService(
+      config,
+      store,
+      new WorkspaceManager(config.workspaceRoot),
+      new FakeRunner(),
+      authStore,
+    );
+
+    await expect(service.initialize()).resolves.toBeUndefined();
+    expect(store.snapshot().agents.filter((agent) => agent.agentKey === "bob-backend"))
+      .toHaveLength(1);
+    expect(store.getAgentByKey("bob-backend")).toMatchObject({
+      id: "archived-bob-history",
+      status: "archived",
+    });
+  });
+
   it("shares the combined database with AuthStore and preserves Agent principals", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "launchpad-sqlite-auth-"));
     temporaryDirectories.push(root);

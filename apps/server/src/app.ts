@@ -101,6 +101,10 @@ const credentialBody = z.object({
   expiresInSeconds: z.number().int().min(60).max(86_400).default(3_600),
 });
 
+const humanSessionCookieName = "launchpad_session";
+const appAccessCookieName = "launchpad_app_access";
+const humanSessionMaxAgeSeconds = 8 * 60 * 60;
+
 type ResourceType = "agent" | "run" | "orchestration" | "system" | "data_asset";
 
 export interface OrchestrationHttpDependencies {
@@ -128,6 +132,42 @@ function isAgentConversation(request: FastifyRequest): boolean {
 function bearerToken(request: FastifyRequest): string {
   const header = request.headers.authorization ?? "";
   return header.startsWith("Bearer ") ? header.slice(7) : "";
+}
+
+function requestCookie(request: FastifyRequest, name: string): string {
+  const header = request.headers.cookie;
+  if (typeof header !== "string") return "";
+  for (const part of header.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 1 || part.slice(0, separator).trim() !== name) continue;
+    const value = part.slice(separator + 1).trim();
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+  return "";
+}
+
+function authCookie(
+  name: string,
+  value: string,
+  request: FastifyRequest,
+  maxAgeSeconds?: number,
+): string {
+  return [
+    `${name}=${encodeURIComponent(value)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    ...(maxAgeSeconds === undefined ? [] : [`Max-Age=${maxAgeSeconds}`]),
+    ...(request.protocol === "https" ? ["Secure"] : []),
+  ].join("; ");
+}
+
+function clearAuthCookie(name: string, request: FastifyRequest): string {
+  return authCookie(name, "", request, 0);
 }
 
 function sharedToken(request: FastifyRequest): string {
@@ -335,7 +375,8 @@ export async function createApp(
       config.nodeEnv === "development"
         ? ["http://localhost:5173", "http://127.0.0.1:5173"]
         : false,
-      allowedHeaders: [
+    credentials: true,
+    allowedHeaders: [
         "Content-Type",
         "Authorization",
         "X-App-Auth-Token",
@@ -366,7 +407,10 @@ export async function createApp(
       // With database auth enabled, the shared deployment token uses its own
       // header so Authorization can carry the per-user session token.
       // Without a database store, retain the original Bearer-token behavior.
-      const candidate = sharedToken(request) || (!authStore ? bearerToken(request) : "");
+      const candidate =
+        sharedToken(request) ||
+        requestCookie(request, appAccessCookieName) ||
+        (!authStore ? bearerToken(request) : "");
       if (!safelyEquals(candidate, config.authToken)) {
         return reply.code(401).send({ error: "Application access token required" });
       }
@@ -386,8 +430,10 @@ export async function createApp(
       return;
     }
 
-    request.auth = bearerToken(request)
-      ? authStore.authenticate(bearerToken(request), request.id)
+    const sessionToken =
+      bearerToken(request) || requestCookie(request, humanSessionCookieName);
+    request.auth = sessionToken
+      ? authStore.authenticate(sessionToken, request.id)
       : null;
 
     if (isConversation) {
@@ -425,7 +471,15 @@ export async function createApp(
       : null,
   }));
 
-  app.get("/api/auth/access", async () => ({ ok: true }));
+  app.get("/api/auth/access", async (request, reply) => {
+    if (config.authToken) {
+      reply.header(
+        "Set-Cookie",
+        authCookie(appAccessCookieName, config.authToken, request),
+      );
+    }
+    return { ok: true };
+  });
 
   app.post("/api/auth/login", async (request, reply) => {
     if (!authStore) {
@@ -436,6 +490,15 @@ export async function createApp(
     if (!result) {
       return reply.code(401).send({ error: "Invalid username or password" });
     }
+    reply.header(
+      "Set-Cookie",
+      authCookie(
+        humanSessionCookieName,
+        result.sessionToken,
+        request,
+        humanSessionMaxAgeSeconds,
+      ),
+    );
     return result;
   });
 
@@ -451,6 +514,10 @@ export async function createApp(
       return reply.code(401).send({ error: "Authentication required" });
     }
     authStore.logout(request.auth);
+    reply.header("Set-Cookie", [
+      clearAuthCookie(humanSessionCookieName, request),
+      clearAuthCookie(appAccessCookieName, request),
+    ]);
     return { ok: true };
   });
 
