@@ -237,7 +237,13 @@ For `delegate`, the dispatcher:
 4. if allowed, atomically appends a `delegation` event and creates a child run
    with the same `job_id` and `parent_run_id` pointing to the waiting parent;
 5. runs the child with its own thread; and
-6. appends a child `result` (or safe failure) before resuming the parent.
+6. appends a child `result` before resuming the parent. If the child returns a
+   valid final response that clearly reports a blocker—such as unavailable
+   data, missing access, or a missing endpoint—the child result is preserved,
+   but the parent is marked failed and is not resumed. This prevents a parent
+   from delegating follow-up work that cannot succeed without the missing
+   dependency. Other terminal child failures also fail the parent instead of
+   being converted into a placeholder result.
 
 If any guard or authorization check denies delegation, no child run is
 created. Instead, the dispatcher appends a `tool_result` containing an
@@ -308,6 +314,14 @@ The child result or denial must be durable before the parent resumes:
    again, or request another protected resource.
 5. Repeat until the root reaches `completed`, `failed`, or `cancelled`.
 
+A valid `final` command is not always a successful result. The dispatcher
+recognizes explicit blocker language in the summary or content (for example,
+`Blocker: ...`, `unavailable`, `cannot access`, or `no ... data ... is
+available`). It stores the full child response for the timeline, then fails
+the waiting parent and job without creating or running another child. Agents
+should state the missing resource type, key, action, and purpose when access is
+the problem so the user has a precise next step.
+
 Example resume envelopes:
 
 ```json
@@ -341,7 +355,7 @@ stateDiagram-v2
     running --> completed: valid final command
     queued --> failed: pre-start failure
     running --> failed: runner/protocol/persistence failure
-    waiting --> failed: resume/recovery failure
+    waiting --> failed: child blocker or resume/recovery failure
     queued --> cancelled: cancellation
     running --> cancelled: cancellation
     waiting --> cancelled: cancellation

@@ -120,6 +120,52 @@ describe("HTTP boundary", () => {
     await rm(root, { recursive: true, force: true });
   });
 
+  it("authenticates a browser session from the http-only cookie after reload", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "launchpad-http-cookie-test-"));
+    const authStore = new AuthStore(path.join(root, "auth.db"));
+    await authStore.initialize(true);
+    const app = await createApp(loadConfig({ NODE_ENV: "test" }), service, authStore);
+
+    const login = await app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { username: "alice", password: "alice-demo-2026" },
+    });
+    expect(login.statusCode).toBe(200);
+    const setCookie = login.headers["set-cookie"];
+    expect(setCookie).toEqual(expect.stringContaining("launchpad_session="));
+    expect(setCookie).toEqual(expect.stringContaining("HttpOnly"));
+
+    const cookie = setCookie!.split(";", 1)[0];
+    const afterReload = await app.inject({
+      method: "GET",
+      url: "/api/auth",
+      headers: { cookie },
+    });
+    expect(afterReload.statusCode).toBe(200);
+    expect(afterReload.json()).toMatchObject({
+      authenticated: true,
+      user: { username: "alice" },
+    });
+
+    const logout = await app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      headers: { cookie },
+    });
+    expect(logout.statusCode).toBe(200);
+    expect(logout.headers["set-cookie"]).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("launchpad_session=;"),
+        expect.stringContaining("launchpad_app_access=;"),
+      ]),
+    );
+
+    await app.close();
+    authStore.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
   it("preserves Fastify client error status codes", async () => {
     const app = await createApp(loadConfig({ NODE_ENV: "test" }), service);
     const malformed = await app.inject({

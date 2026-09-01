@@ -123,6 +123,9 @@ function runSummary(run: OrchestrationRun): string {
 
 function errorTitle(error: string): string {
   const value = error.toLocaleLowerCase();
+  if (value.includes("reported a blocker")) {
+    return "Required information or access is unavailable.";
+  }
   if (value.includes("valid json") || value.includes("invalid agent command")) {
     return "The Agent returned an invalid response format.";
   }
@@ -141,6 +144,9 @@ function errorTitle(error: string): string {
 
 function errorGuidance(error: string, recoveryAttempted = false): string {
   const value = error.toLocaleLowerCase();
+  if (value.includes("reported a blocker")) {
+    return "No further Agent was started. Review the delegated result and provide the missing resource or access before starting a new job.";
+  }
   if (value.includes("authorization") || value.includes("permission")) {
     return "No automatic retry was made. Check the project membership, Agent assignment, or protected-resource capability, then start a new job.";
   }

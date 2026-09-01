@@ -8,6 +8,7 @@ import type {
 import {
   AgentProtocolError,
   agentResumeEnvelopeSchema,
+  finalCommandIndicatesBlocker,
   parseAgentCommand,
 } from "./orchestration-protocol.js";
 import type {
@@ -272,7 +273,13 @@ export class OrchestrationDispatcher {
       this.activeJobs.delete(job.id);
       return currentJob;
     }
-    if (currentRoot.status === "completed") {
+    if (!outcome.ok) {
+      await this.repository.completeJob({
+        jobId: job.id,
+        status: "failed",
+        errorText: outcome.content,
+      });
+    } else if (currentRoot.status === "completed") {
       await this.repository.completeJob({
         jobId: job.id,
         status: "completed",
@@ -339,7 +346,13 @@ export class OrchestrationDispatcher {
       .find((candidate) => candidate.parentRunId === null);
     const currentJob = this.repository.getJob(run.jobId);
     if (root && currentJob && (currentJob.status === "queued" || currentJob.status === "running")) {
-      if (root.status === "completed") {
+      if (!outcome.ok) {
+        await this.repository.completeJob({
+          jobId: run.jobId,
+          status: "failed",
+          errorText: outcome.content,
+        });
+      } else if (root.status === "completed") {
         await this.repository.completeJob({
           jobId: run.jobId,
           status: "completed",
@@ -485,6 +498,7 @@ export class OrchestrationDispatcher {
     if (command.type === "final") {
       try {
         const outputText = finalContentText(command.content);
+        const isBlocker = finalCommandIndicatesBlocker(command);
         const completed = await this.repository.completeRun({
           runId: run.id,
           outputText,
@@ -492,7 +506,13 @@ export class OrchestrationDispatcher {
           codexThreadId: result.threadId ?? run.codexThreadId,
           usage: addUsage(run.usage, result.usage),
         });
-        return { ok: true, content: outputText, run: completed };
+        return {
+          ok: !isBlocker,
+          content: isBlocker
+            ? blockerOutcomeMessage(agent, command.summary ?? outputText)
+            : outputText,
+          run: completed,
+        };
       } catch (error) {
         return this.failRun(run, errorMessage(error));
       }
@@ -649,10 +669,13 @@ export class OrchestrationDispatcher {
     );
     const childAgent = this.agents.getAgentById(target!.id);
     const childKey = childAgent?.agentKey ?? targetKey;
+    if (!childOutcome.ok) {
+      return this.failRun(run, childOutcome.content);
+    }
     const envelope = agentResumeEnvelopeSchema.parse({
       type: "child_result",
       sourceAgentKey: childKey,
-      content: childOutcome.ok ? childOutcome.content : "Child run failed safely.",
+      content: childOutcome.content,
     });
     return this.resumeWithEnvelope(
       run,
@@ -767,12 +790,15 @@ export class OrchestrationDispatcher {
         ),
       ),
     );
+    const failedChild = childOutcomes.find((outcome) => !outcome.ok);
+    if (failedChild) {
+      return this.failRun(run, failedChild.content);
+    }
     const combined = childOutcomes
       .map((outcome, index) => {
         const target = targets[index]!;
-        const content = outcome.ok ? outcome.content : "Child run failed safely.";
         const label = target.name ? `${target.name} (${target.agentKey})` : target.agentKey;
-        return `${label}:\n${content}`;
+        return `${label}:\n${outcome.content}`;
       })
       .join("\n\n")
       .slice(0, 50_000);
@@ -1303,6 +1329,16 @@ function redactDiagnostic(value: string): string {
       "$1=[redacted]",
     )
     .slice(0, 500);
+}
+
+function blockerOutcomeMessage(
+  agent: OrchestrationAgentDescriptor,
+  detail: string,
+): string {
+  const label = agent.name ? `${agent.name} (${agent.agentKey})` : agent.agentKey;
+  const safeDetail = redactDiagnostic(detail.trim()) ||
+    "Required information or access is unavailable.";
+  return `Agent ${label} reported a blocker: ${safeDetail} Orchestration stopped before any further delegation.`;
 }
 
 function sanitizeResourceContent(value: string): string {

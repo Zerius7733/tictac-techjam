@@ -86,6 +86,30 @@ export type ResourceRequestCommand = z.infer<
 >;
 export type AgentCommand = z.infer<typeof agentCommandSchema>;
 
+/**
+ * A valid final response can still report that the requested dependency is
+ * unavailable. Keep this compatible with the existing final command shape so
+ * Agents do not need to invent a second protocol just to report a blocker.
+ */
+export function finalCommandIndicatesBlocker(
+  command: FinalAgentCommand,
+): boolean {
+  const content =
+    typeof command.content === "string"
+      ? command.content
+      : JSON.stringify(command.content);
+  const text = [command.summary ?? "", content ?? ""].join("\n");
+
+  return [
+    /\bblocker\s*:/i,
+    /\b(?:unavailable|not available|inaccessible)\b/i,
+    /\b(?:cannot|can't|unable to|could not|couldn't)\s+(?:access|retrieve|provide|find|obtain|read|load|query)\b/i,
+    /\b(?:does not|doesn't|do not|don't)\s+have\s+(?:the\s+)?(?:required\s+)?(?:access|permission|data|information)\b/i,
+    /\b(?:data|information|access|permission|endpoint|resource)\s+(?:is|are)\s+(?:currently\s+)?(?:unavailable|not available|missing|denied|blocked)\b/i,
+    /\bno\b[^.!?\n]{0,80}\b(?:data|information|endpoint|resource)\b[^.!?\n]{0,40}\b(?:available|provided|exposed|present)\b/i,
+  ].some((pattern) => pattern.test(text));
+}
+
 export class AgentProtocolError extends Error {
   readonly code = "invalid_agent_protocol";
 

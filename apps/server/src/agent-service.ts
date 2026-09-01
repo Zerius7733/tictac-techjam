@@ -589,10 +589,9 @@ export class AgentService {
         existing.some(
           (agent) =>
             agent.id === seed.id ||
+            agent.agentKey.toLocaleLowerCase() === seed.agentKey.toLocaleLowerCase() ||
             (agent.status !== "archived" &&
-              (agent.agentKey.toLocaleLowerCase() ===
-                seed.agentKey.toLocaleLowerCase() ||
-                agent.name.toLocaleLowerCase() === seed.name.toLocaleLowerCase())),
+              agent.name.toLocaleLowerCase() === seed.name.toLocaleLowerCase()),
         )
       ) {
         continue;
@@ -627,10 +626,9 @@ export class AgentService {
             database.agents.some(
               (item) =>
                 item.id === seed.id ||
+                item.agentKey.toLocaleLowerCase() === seed.agentKey.toLocaleLowerCase() ||
                 (item.status !== "archived" &&
-                  (item.agentKey.toLocaleLowerCase() ===
-                    seed.agentKey.toLocaleLowerCase() ||
-                    item.name.toLocaleLowerCase() === seed.name.toLocaleLowerCase())),
+                  item.name.toLocaleLowerCase() === seed.name.toLocaleLowerCase()),
             )
           ) {
             return;
